@@ -1,0 +1,158 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function userPath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid);
+    }
+
+    function hasUserDoc() {
+      return isSignedIn() && exists(userPath());
+    }
+
+    function userData() {
+      return get(userPath()).data;
+    }
+
+    function isConfiguredSuperAdmin() {
+      return isSignedIn() &&
+        (request.auth.token.email == 'admin@agentic.com' ||
+          request.auth.token.email == 'superadmin@homecare.com');
+    }
+
+    function isSuperAdmin() {
+      return isConfiguredSuperAdmin() ||
+        (hasUserDoc() &&
+          (userData().isSuperAdmin == true ||
+            (userData().isAdmin == true && userData().role == 'admin')));
+    }
+
+    function isHomeOwner(homeId) {
+      return isSignedIn() &&
+        (homeId == request.auth.uid ||
+          (exists(/databases/$(database)/documents/homes/$(homeId)) &&
+            get(/databases/$(database)/documents/homes/$(homeId)).data.ownerId == request.auth.uid));
+    }
+
+    function isHomeStaff(homeId) {
+      return hasUserDoc() && (userData().homeId == homeId || userData().activeHomeId == homeId);
+    }
+
+    function isHomeBusinessMember(homeId) {
+      return hasUserDoc() &&
+        exists(/databases/$(database)/documents/homes/$(homeId)) &&
+        userData().businessId is string &&
+        get(/databases/$(database)/documents/homes/$(homeId)).data.businessId == userData().businessId;
+    }
+
+    function isHomeAccessible(homeId) {
+      return homeId is string &&
+        (isSuperAdmin() || isHomeOwner(homeId) || isHomeStaff(homeId) || isHomeBusinessMember(homeId));
+    }
+
+    function canManageHome(homeId) {
+      return isSuperAdmin() ||
+        isHomeOwner(homeId) ||
+        (isHomeBusinessMember(homeId) && userData().isAdmin == true);
+    }
+
+    function hasHomeId(data) {
+      return data.keys().hasAny(['homeId']) && data.homeId is string;
+    }
+
+    function canReadHomeResource(data) {
+      return hasHomeId(data) && isHomeAccessible(data.homeId);
+    }
+
+    function canCreateHomeResource(data) {
+      return hasHomeId(data) && isHomeAccessible(data.homeId);
+    }
+
+    function canReadBusiness(businessId) {
+      return isSuperAdmin() ||
+        (isSignedIn() &&
+          (businessId == request.auth.uid ||
+            resource.data.ownerUid == request.auth.uid ||
+            (hasUserDoc() && userData().businessId == businessId)));
+    }
+
+    function canManageBusiness(businessId) {
+      return isSuperAdmin() ||
+        (isSignedIn() &&
+          (resource.data.ownerUid == request.auth.uid ||
+            (hasUserDoc() && userData().businessId == businessId && userData().isAdmin == true)));
+    }
+
+    match /users/{userId} {
+      allow read, write: if isSignedIn() && (request.auth.uid == userId || isSuperAdmin());
+    }
+
+    match /residents/{document=**} {
+      allow read, update, delete: if isSignedIn() && (resource.data.ownerId == request.auth.uid || canReadHomeResource(resource.data));
+      allow create: if isSignedIn() && (request.resource.data.ownerId == request.auth.uid || canCreateHomeResource(request.resource.data));
+    }
+
+    match /intake_pipeline/{document=**} {
+      allow read, update, delete: if isSignedIn() && (resource.data.ownerId == request.auth.uid || canReadHomeResource(resource.data));
+      allow create: if isSignedIn() && (request.resource.data.ownerId == request.auth.uid || canCreateHomeResource(request.resource.data));
+    }
+
+    match /intake_documents/{document=**} {
+      allow read, update, delete: if canReadHomeResource(resource.data);
+      allow create: if canCreateHomeResource(request.resource.data);
+    }
+
+    match /messages/{document=**} {
+      allow read, update, delete: if canReadHomeResource(resource.data);
+      allow create: if canCreateHomeResource(request.resource.data);
+    }
+
+    match /homes/{homeId} {
+      allow read: if resource.data.complianceStatus == 'Verified' || 
+                    resource.data.ownerId == request.auth.uid ||
+                    isHomeAccessible(homeId);
+      allow create: if isSignedIn() && (homeId == request.auth.uid || request.resource.data.ownerId == request.auth.uid);
+      allow update, delete: if isSignedIn() && (resource.data.ownerId == request.auth.uid || canManageHome(homeId));
+    }
+
+    match /businesses/{businessId} {
+      allow read: if canReadBusiness(businessId);
+      allow create: if isSuperAdmin() ||
+        (isSignedIn() && (businessId == request.auth.uid || request.resource.data.ownerUid == request.auth.uid));
+      allow update, delete: if canManageBusiness(businessId);
+    }
+
+    match /clinical_notes/{document=**} {
+      allow read: if canReadHomeResource(resource.data);
+      allow create: if canCreateHomeResource(request.resource.data);
+      allow update, delete: if isSuperAdmin();
+    }
+
+    match /resellers/{resellerId} {
+      allow read: if isSuperAdmin() ||
+        (isSignedIn() && (resellerId == request.auth.uid || resource.data.ownerId == request.auth.uid));
+      allow create: if isSuperAdmin() ||
+        (isSignedIn() && (resellerId == request.auth.uid || request.resource.data.ownerId == request.auth.uid));
+      allow update, delete: if isSuperAdmin() ||
+        (isSignedIn() && resource.data.ownerId == request.auth.uid);
+    }
+
+    match /shifts/{shiftId} {
+      allow read, update, delete: if isSignedIn() && (resource.data.caregiverId == request.auth.uid || isHomeAccessible(resource.data.homeId));
+      allow create: if isSignedIn() && (request.resource.data.caregiverId == request.auth.uid || isHomeAccessible(request.resource.data.homeId));
+    }
+
+    match /system_logs/{document=**} {
+      allow read: if canReadHomeResource(resource.data);
+      allow create: if canCreateHomeResource(request.resource.data);
+      allow update, delete: if isSuperAdmin();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

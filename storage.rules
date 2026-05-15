@@ -1,0 +1,44 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function userPath() {
+      return /databases/(default)/documents/users/$(request.auth.uid);
+    }
+
+    function hasUserDoc() {
+      return isSignedIn() && firestore.exists(userPath());
+    }
+
+    function userData() {
+      return firestore.get(userPath()).data;
+    }
+
+    function isSuperAdmin() {
+      return isSignedIn() &&
+        (request.auth.token.email == 'admin@agentic.com' ||
+          request.auth.token.email == 'superadmin@homecare.com');
+    }
+
+    function canAccessHome(homeId) {
+      return isSuperAdmin() ||
+        (isSignedIn() && homeId == request.auth.uid) ||
+        (hasUserDoc() && userData().homeId == homeId);
+    }
+
+    match /intakes/{homeId}/{residentId}/{allPaths=**} {
+      allow read, write: if canAccessHome(homeId);
+    }
+
+    match /profiles/{userId}/{allPaths=**} {
+      allow read, write: if isSuperAdmin() || (isSignedIn() && request.auth.uid == userId);
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

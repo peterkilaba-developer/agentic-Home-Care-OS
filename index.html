@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0f172a" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/pwa-192x192.png" />
+    <script type="module">
+      import RefreshRuntime from "/@react-refresh"
+      RefreshRuntime.injectIntoGlobalHook(window)
+      window.$RefreshReg$ = () => {}
+      window.$RefreshSig$ = () => (type) => type
+      window.__vite_plugin_react_preamble_installed__ = true
+    </script>
+    <title>Agentic Home Care OS - AI Guided AFH Platform</title>
+    <script>
+      window.initGoogleMaps = function () {
+        window.__googleMapsReady = true;
+        window.dispatchEvent(new Event('google-maps-ready'));
+      };
+      window.gm_authFailure = function () {
+        window.dispatchEvent(new Event('google-maps-error'));
+      };
+    </script>
+    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyDDxYtMR6pGB7_CXs6YLsKR7AU9gjulWUU&libraries=places&callback=initGoogleMaps" async defer></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

@@ -1,0 +1,141 @@
+@import url('https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400..800;1,400..800&family=Lora:ital,wght@0,400..700;1,400..700&display=swap');
+@import "tailwindcss";
+
+:root {
+  /* Colors - Refined Professional Palette */
+  --background: oklch(100% 0 0);
+  --foreground: oklch(20% 0.02 260);
+  --primary: oklch(45% 0.15 260); /* Deeper, more professional blue */
+  --primary-foreground: oklch(100% 0 0);
+  --secondary: oklch(97% 0.01 260);
+  --secondary-foreground: oklch(25% 0.02 260);
+  --accent: oklch(60% 0.15 150); /* Trustworthy emerald/teal */
+  --accent-foreground: oklch(100% 0 0);
+  --muted: oklch(60% 0.01 260);
+  --muted-foreground: oklch(35% 0.02 260); /* Slightly darker for better legibility */
+  --border: oklch(90% 0.01 260);
+  --input: oklch(90% 0.01 260);
+  --ring: oklch(45% 0.15 260);
+  
+  /* Surface colors */
+  --surface: oklch(99% 0.005 260);
+  --surface-hover: oklch(97% 0.01 260);
+  
+  /* Radius */
+  --radius: 1rem;
+}
+
+.dark {
+  --background: oklch(15% 0.01 260);
+  --foreground: oklch(95% 0.01 260);
+  --primary: oklch(65% 0.12 260);
+  --primary-foreground: oklch(15% 0.01 260);
+  --secondary: oklch(20% 0.01 260);
+  --secondary-foreground: oklch(95% 0.01 260);
+  --accent: oklch(70% 0.12 150);
+  --accent-foreground: oklch(15% 0.01 260);
+  --muted: oklch(40% 0.01 260);
+  --muted-foreground: oklch(80% 0.01 260);
+  --border: oklch(25% 0.01 260);
+  --input: oklch(25% 0.01 260);
+  --ring: oklch(65% 0.12 260);
+  
+  --surface: oklch(18% 0.01 260);
+  --surface-hover: oklch(22% 0.01 260);
+}
+
+@theme {
+  --font-serif: "EB Garamond", serif;
+  --font-sans: "Lora", serif; /* Defaulting even "sans" to Lora for a unified traditional feel */
+  
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-surface: var(--surface);
+  --color-surface-hover: var(--surface-hover);
+
+  --shadow-premium: 0 10px 30px -10px oklch(0% 0 0 / 0.08);
+  --shadow-inner-white: inset 0 1px 0 0 oklch(100% 0 0 / 0.5);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-serif); /* Default to Serif */
+    font-feature-settings: "ss01", "ss02", "cv01", "cv02";
+  }
+}
+
+@layer components {
+  .glass-card {
+    background: color-mix(in oklch, var(--surface), transparent 30%);
+    backdrop-filter: blur(16px);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-premium);
+    @apply rounded-2xl transition-all duration-300;
+  }
+  
+  .glass-card:hover {
+    background: color-mix(in oklch, var(--surface), transparent 10%);
+    border-color: var(--primary);
+    transform: translateY(-2px);
+  }
+
+  .text-editorial {
+    @apply leading-[1.1] tracking-[-0.02em] font-sans font-semibold; /* Heading style updated to Sans */
+  }
+
+  .section-padding {
+    @apply py-12 md:py-16;
+  }
+}
+
+/* Google Maps Autocomplete Dropdown - Ensure visibility over high z-index modals */
+.pac-container {
+  z-index: 100000 !important;
+  border-radius: 1rem;
+  margin-top: 5px;
+  border: 1px solid var(--border);
+  background-color: var(--surface) !important;
+  color: var(--foreground) !important;
+  box-shadow: var(--shadow-premium) !important;
+  font-family: inherit !important;
+}
+
+.pac-item {
+  padding: 10px 15px !important;
+  border-top: 1px solid var(--border) !important;
+  color: var(--foreground) !important;
+  cursor: pointer;
+}
+
+.pac-item:hover {
+  background-color: var(--surface-hover) !important;
+}
+
+.pac-item-query {
+  color: var(--foreground) !important;
+  font-size: 14px !important;
+}
+
+.pac-icon {
+  display: none !important;
+}
+
+.pac-matched {
+  color: var(--primary) !important;
+}
