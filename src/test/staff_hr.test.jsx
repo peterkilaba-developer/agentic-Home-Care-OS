@@ -24,13 +24,14 @@ vi.mock('lucide-react', () => ({
 }));
 
 // Mock Firebase
-vi.mock('../../firebase', () => ({
+vi.mock('../firebase', () => ({
   db: {},
+  auth: {},
   functions: {}
 }));
 
 // Mock runtime config
-vi.mock('../../config/runtime', () => ({
+vi.mock('../config/runtime', () => ({
   buildCaregiverInviteUrl: (url) => url,
   buildQrCodeUrl: (url) => url,
   getCaregiverInviteOrigin: () => 'http://localhost:5173',

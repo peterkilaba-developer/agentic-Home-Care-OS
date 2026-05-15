@@ -18,9 +18,8 @@ service cloud.firestore {
     }
 
     function isConfiguredSuperAdmin() {
-      return isSignedIn() &&
-        (request.auth.token.email == 'admin@agentic.com' ||
-          request.auth.token.email == 'superadmin@homecare.com');
+      // Super-admin is granted via Firebase custom claims (set server-side only)
+      return isSignedIn() && request.auth.token.get('superAdmin', false) == true;
     }
 
     function isSuperAdmin() {
@@ -87,7 +86,13 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
-      allow read, write: if isSignedIn() && (request.auth.uid == userId || isSuperAdmin());
+      allow read: if isSignedIn() && (request.auth.uid == userId || isSuperAdmin());
+      // Super-admins can write anything; regular users can write their own doc but cannot self-escalate privilege fields
+      allow write: if isSuperAdmin() ||
+        (isSignedIn() && request.auth.uid == userId
+          && !(request.resource.data.get('isAdmin', false) == true && resource.data.get('isAdmin', false) != true)
+          && !(request.resource.data.get('isSuperAdmin', false) == true && resource.data.get('isSuperAdmin', false) != true)
+          && !(request.resource.data.get('role', '') == 'admin' && resource.data.get('role', '') != 'admin'));
     }
 
     match /residents/{document=**} {
@@ -111,8 +116,8 @@ service cloud.firestore {
     }
 
     match /homes/{homeId} {
-      allow read: if resource.data.complianceStatus == 'Verified' || 
-                    resource.data.ownerId == request.auth.uid ||
+      allow read: if (isSignedIn() && resource.data.complianceStatus == 'Verified') ||
+                    (isSignedIn() && resource.data.ownerId == request.auth.uid) ||
                     isHomeAccessible(homeId);
       allow create: if isSignedIn() && (homeId == request.auth.uid || request.resource.data.ownerId == request.auth.uid);
       allow update, delete: if isSignedIn() && (resource.data.ownerId == request.auth.uid || canManageHome(homeId));
@@ -149,6 +154,11 @@ service cloud.firestore {
       allow read: if canReadHomeResource(resource.data);
       allow create: if canCreateHomeResource(request.resource.data);
       allow update, delete: if isSuperAdmin();
+    }
+
+    match /family_invites/{inviteId} {
+      allow read: if isSignedIn() && resource.data.email == request.auth.token.email;
+      allow create, update, delete: if false;
     }
 
     match /{document=**} {

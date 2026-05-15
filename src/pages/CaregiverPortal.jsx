@@ -24,7 +24,7 @@ export default function CaregiverPortal() {
   const stateData = US_STATES[stateCode] || DEFAULT_STATE;
   const [agentName, setAgentName] = useState('Florence');
   const [currentUser, setCurrentUser] = useState(() => {
-    if (window.location.search.includes('bypass=caregiver')) {
+    if (import.meta.env.DEV && window.location.hostname === 'localhost' && window.location.search.includes('bypass=caregiver')) {
       return { uid: 'demo_caregiver_001', email: 'demo@caregiver.local' };
     }
     return auth.currentUser;
@@ -61,7 +61,7 @@ export default function CaregiverPortal() {
   };
 
   useEffect(() => {
-    if (window.location.search.includes('bypass=caregiver')) {
+    if (import.meta.env.DEV && window.location.hostname === 'localhost' && window.location.search.includes('bypass=caregiver')) {
       setCurrentUser({ uid: 'demo_caregiver_001', email: 'demo@caregiver.local' });
       setAuthReady(true);
       return;

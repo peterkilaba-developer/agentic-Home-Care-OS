@@ -3,8 +3,8 @@ const configuredAdminEmails = import.meta.env.VITE_ADMIN_EMAILS
   .map((email) => email.trim().toLowerCase())
   .filter(Boolean);
 
-export const ADMIN_EMAILS = configuredAdminEmails?.length ? configuredAdminEmails : [
-  'admin@agentic.com',
-  'superadmin@homecare.com',
-  'peterkilaba@gmail.com',
-];
+if (!configuredAdminEmails?.length) {
+  console.warn('VITE_ADMIN_EMAILS is not set — no super-admins will have access. Set this env var before deploying.');
+}
+
+export const ADMIN_EMAILS = configuredAdminEmails ?? [];

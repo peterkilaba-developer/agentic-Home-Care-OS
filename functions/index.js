@@ -52,7 +52,11 @@ function appUrl(path) {
 }
 
 function getAdminEmails() {
-  return (process.env.ADMIN_EMAILS || 'admin@agentic.com,superadmin@homecare.com')
+  if (!process.env.ADMIN_EMAILS) {
+    console.warn('ADMIN_EMAILS env var is not set — no super-admin emails configured.');
+    return [];
+  }
+  return process.env.ADMIN_EMAILS
     .split(',')
     .map((email) => email.trim().toLowerCase())
     .filter(Boolean);
@@ -478,7 +482,7 @@ exports.provisionStaffAccount = onCall(async (request) => {
 Please use this link to securely verify your identity and join our Operational Compliance OS:
 ${inviteLink}`;
 
-        console.log(`Attempting to send SMS to ${formattedPhone} via ${fromNumber}...`);
+        console.log(`Attempting to send SMS (number redacted for privacy)...`);
         await twilio.messages.create({
           body: messageBody,
           from: fromNumber,
@@ -566,7 +570,7 @@ exports.acceptStaffInvite = onCall(async (request) => {
 
     const inviteEmail = String(email || signedInEmail || '').trim().toLowerCase();
 
-    console.log(`acceptStaffInvite: uid=${auth.uid}, signedInEmail=${signedInEmail}, inviteEmail=${inviteEmail}, phone=${phone}`);
+    console.log(`acceptStaffInvite: uid=${auth.uid} (PII redacted)`);
 
     const homeRef = db.collection('homes').doc(homeId);
     const homeSnap = await homeRef.get();
@@ -665,7 +669,7 @@ exports.deprovisionStaffAccount = onCall(async (request) => {
       const staffData = staffSnap.exists ? staffSnap.data() : null;
 
       if (staffData?.homeId !== homeId && !isSuperAdmin(auth)) {
-        console.warn(`Staff member ${uid} belongs to home ${staffData?.homeId}, not ${homeId}. Proceeding with cautious deletion.`);
+        throw new HttpsError('permission-denied', 'Cannot deprovision staff belonging to a different home.');
       }
 
       await admin.auth().deleteUser(uid);
@@ -901,14 +905,14 @@ exports.onChatMessageCreated = onDocumentCreated('messages/{messageId}', async (
       .get();
 
     // If we have Twilio, we could send an SMS to the active caregiver(s)
-    const twilio = getTwilio();
+    const twilio = process.env.TWILIO_ACCOUNT_SID ? getTwilio() : null;
     if (twilio) {
       for (const doc of shiftQuery.docs) {
         const shift = doc.data();
         if (shift.staffPhone) {
           await twilio.messages.create({
             body: `[Home Care OS] Family Message for ${message.residentName || 'Resident'}: "${text.slice(0, 50)}${text.length > 50 ? '...' : ''}" - Reply in Caregiver Portal.`,
-            from: process.env.TWILIO_PHONE_NUMBER,
+            from: process.env.TWILIO_FROM_NUMBER,
             to: shift.staffPhone
           });
         }
