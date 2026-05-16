@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { FileText, X, UploadCloud, Loader2, CheckCircle2, Activity, Search, AlertTriangle, ArrowRight, Shield } from 'lucide-react';
+import { FileText, X, UploadCloud, Loader2, CheckCircle2, Activity, Search, AlertTriangle, ArrowRight, Shield, Hospital, Mail, Send } from 'lucide-react';
 import { isLocalDemoEnabled, readLocalDemoState, writeLocalDemoState } from '../../data/localDemo';
 import { httpsCallable } from 'firebase/functions';
-import { collection, addDoc, doc, serverTimestamp, deleteDoc, setDoc } from 'firebase/firestore';
+import { collection, addDoc, doc, serverTimestamp, deleteDoc, setDoc, query, where, onSnapshot, updateDoc } from 'firebase/firestore';
 import { functions, db } from '../../firebase';
 import { calculateTotalFitScore } from '../../utils/compliance';
 import { getStateCompliance, validateCarePlanForState } from '../../utils/stateCompliance';
@@ -420,6 +420,27 @@ export default function IntakePipelineView({ pipeline, stateData, homeData, resi
   const [declineReason, setDeclineReason] = useState('');
   const [declining, setDeclining] = useState(false);
   const [showDeclineForm, setShowDeclineForm] = useState(false);
+  const [activeTab, setActiveTab] = useState('active');
+  const [declinedLeads, setDeclinedLeads] = useState([]);
+  const [referralTarget, setReferralTarget] = useState(null); // declined lead being referred
+  const [referralFacility, setReferralFacility] = useState({ name: '', email: '', phone: '', notes: '' });
+  const [referring, setReferring] = useState(false);
+
+  // Load declined admissions for this home
+  useEffect(() => {
+    if (!selectedHomeId) return;
+    if (isLocalDemoEnabled()) {
+      const refresh = () => setDeclinedLeads(readLocalDemoState().declined || []);
+      refresh();
+      window.addEventListener('demo-refresh', refresh);
+      return () => window.removeEventListener('demo-refresh', refresh);
+    }
+    const q = query(collection(db, 'declined_admissions'), where('homeId', '==', selectedHomeId));
+    const unsub = onSnapshot(q, (snap) => {
+      setDeclinedLeads(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    }, (err) => console.error('[PIPELINE] declined snapshot:', err));
+    return () => unsub();
+  }, [selectedHomeId]);
 
   const [careTeamQuestions, setCareTeamQuestions] = useState({
     difficultTasks: '', challengingTime: '', triggers: '', interventions: '',
@@ -583,12 +604,28 @@ export default function IntakePipelineView({ pipeline, stateData, homeData, resi
 
         if (isLocalDemoEnabled()) {
           const demoState = readLocalDemoState();
+          const demoLeadId = `demo_lead_${Date.now()}`;
           writeLocalDemoState({
-          ...demoState,
-          pipeline: [...(demoState.pipeline || []), { ...nextForm, id: `demo_lead_${Date.now()}` }]
-        });
-        window.dispatchEvent(new CustomEvent('demo-refresh'));
-      }
+            ...demoState,
+            pipeline: [...(demoState.pipeline || []), { ...nextForm, id: demoLeadId, status: 'pending', createdAt: new Date().toISOString() }]
+          });
+          window.dispatchEvent(new CustomEvent('demo-refresh'));
+          setSelectedLeadId(demoLeadId);
+        } else if (selectedHomeId) {
+          // Persist to Firestore immediately so leaving the modal mid-flow doesn't lose data.
+          try {
+            const docRef = await addDoc(collection(db, 'intake_pipeline'), {
+              ...nextForm,
+              homeId: selectedHomeId,
+              ownerId: homeData?.ownerId || null,
+              status: 'pending',
+              createdAt: serverTimestamp(),
+            });
+            setSelectedLeadId(docRef.id);
+          } catch (persistErr) {
+            console.error('[INTAKE] Failed to persist pipeline lead:', persistErr);
+          }
+        }
 
         setTerminalLogs(prev => [...prev, "Audit complete.", "RCFEM Part 1 Analysis finalized."]);
         setTimeout(() => { setActiveModal('review'); setReviewStep(1); }, 1000);
@@ -685,6 +722,98 @@ Administrator: ____________________ Date: __________`;
       setNegotiatedCarePlan(fallbackTemplate);
       setReviewStep(3);
     } finally { setSaving(false); }
+  };
+
+  const buildReferralSummary = (lead, facility) => {
+    const id = lead.identity || lead;
+    const dx = lead.diagnoses || {};
+    const meds = Array.isArray(lead.medications) ? lead.medications : [];
+    const ai = lead.aiSnapshot || lead.fitDetermination || {};
+    return [
+      `REFERRAL TO ${(facility.name || 'NURSING FACILITY').toUpperCase()}`,
+      `Referring facility: ${homeData?.homeName || homeData?.agencyName || 'Home'}`,
+      `License: ${homeData?.licenseNumber || 'N/A'}`,
+      '',
+      'RESIDENT',
+      `Name: ${id.name || lead.name || 'Unknown'}`,
+      `DOB: ${id.dob || lead.dob || 'Unknown'}`,
+      id.sex ? `Sex: ${id.sex}` : null,
+      '',
+      'CLINICAL',
+      `Primary diagnosis: ${dx.primary || lead.diagnosis || 'Not specified'}`,
+      dx.secondary?.length ? `Secondary: ${dx.secondary.join(', ')}` : null,
+      dx.chronicConditions?.length ? `Chronic: ${dx.chronicConditions.join(', ')}` : null,
+      `Medications: ${meds.length} active${meds.length ? ' — ' + meds.map(m => m.name).filter(Boolean).join(', ') : ''}`,
+      '',
+      'REASON FOR REFERRAL',
+      `Declined from ${homeData?.careType || 'home care'} because clinical needs exceed facility scope.`,
+      lead.declineReason ? `Decline reason: ${lead.declineReason}` : null,
+      '',
+      'AI CLINICAL ANALYSIS (snapshot at decline)',
+      `Recommendation: ${ai.recommendation || 'Decline'}`,
+      ai.reasoning ? `Reasoning: ${ai.reasoning}` : null,
+      ai.risks?.length ? `Risks: ${ai.risks.join('; ')}` : null,
+      lead.acuityGaps?.length ? `Acuity concerns: ${lead.acuityGaps.map(g => g.label).join('; ')}` : null,
+      '',
+      facility.notes ? `Additional notes: ${facility.notes}` : null,
+      '',
+      `Please contact ${homeData?.homeName || 'us'} at ${homeData?.phone || 'phone on file'} to coordinate transfer.`,
+    ].filter(Boolean).join('\n');
+  };
+
+  const handleReferToSNF = async () => {
+    if (!referralTarget) return;
+    if (!referralFacility.name?.trim() || referralFacility.name.trim().length < 2) {
+      setError('Facility name is required.');
+      return;
+    }
+    setReferring(true);
+    try {
+      const summary = buildReferralSummary(referralTarget, referralFacility);
+      const referralPayload = {
+        referredTo: {
+          name: referralFacility.name.trim(),
+          email: referralFacility.email.trim() || null,
+          phone: referralFacility.phone.trim() || null,
+        },
+        notes: referralFacility.notes.trim() || null,
+        referralSummary: summary,
+        referredAt: serverTimestamp(),
+        status: 'referred',
+      };
+
+      if (isLocalDemoEnabled()) {
+        const demoState = readLocalDemoState();
+        writeLocalDemoState({
+          ...demoState,
+          declined: (demoState.declined || []).map(d =>
+            d.id === referralTarget.id
+              ? { ...d, ...referralPayload, referredAt: new Date().toISOString() }
+              : d
+          ),
+        });
+        window.dispatchEvent(new CustomEvent('demo-refresh'));
+      } else {
+        await updateDoc(doc(db, 'declined_admissions', referralTarget.id), referralPayload);
+      }
+
+      createSystemLog('ADMISSION_REFERRED', `Referred ${referralTarget.identity?.name || referralTarget.name || 'resident'} to ${referralFacility.name.trim()}`, null, referralTarget.identity?.name || referralTarget.name);
+
+      // Open the user's email client with a pre-filled message if email provided.
+      if (referralFacility.email?.trim()) {
+        const subject = encodeURIComponent(`Resident referral: ${referralTarget.identity?.name || referralTarget.name || 'Resident'}`);
+        const body = encodeURIComponent(summary);
+        window.open(`mailto:${referralFacility.email.trim()}?subject=${subject}&body=${body}`, '_blank');
+      }
+
+      setReferralTarget(null);
+      setReferralFacility({ name: '', email: '', phone: '', notes: '' });
+    } catch (err) {
+      console.error('[PIPELINE] Referral error:', err);
+      setError(err.message);
+    } finally {
+      setReferring(false);
+    }
   };
 
   const handleDeclineAdmission = async () => {
@@ -803,26 +932,103 @@ Administrator: ____________________ Date: __________`;
         </button>
       </header>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {pipeline.map(lead => (
-          <div key={lead.id} className="glass-card p-6 border-l-4 border-indigo-500 hover:shadow-xl transition-all">
-            <h3 className="font-bold text-lg">{lead.name || 'Anonymous'}</h3>
-            <p className="text-xs text-indigo-500 font-bold mb-4 uppercase tracking-widest">{homeData?.state || stateData.name} Compliance</p>
-            <button onClick={() => { 
-              setSelectedLeadId(lead.id); 
-              setLeadForm({ ..._leadForm, ...lead }); 
-              setRcfemScores(lead.rcfemScores || { clinical: 0, safety: 0, personCentered: 0, operational: 0, observation: 0, alignment: 0 });
-              setRcfemRationales(lead.rcfemRationales || { clinical: '', safety: '', personCentered: '', operational: '', observation: '', alignment: '' });
-              setPart2Observations(lead.part2Observations || { physical: '', cognitive: '', communication: '', social: '', environmental: '' });
-              setReviewStep(1); 
-              setActiveModal('review'); 
-            }} className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-bold text-xs">
-              Review RCFEM Audit
-            </button>
-          </div>
+      {/* Tabs */}
+      <div className="flex gap-2 border-b border-border mb-6">
+        {[
+          { id: 'active', label: 'Active Pipeline', count: pipeline.length },
+          { id: 'declined', label: 'Not Fit for Home Care', count: declinedLeads.filter(d => d.status !== 'referred').length },
+          { id: 'referred', label: 'Referred Out', count: declinedLeads.filter(d => d.status === 'referred').length },
+        ].map(t => (
+          <button
+            key={t.id}
+            onClick={() => setActiveTab(t.id)}
+            className={`px-5 py-3 text-xs font-bold uppercase tracking-widest transition-all border-b-2 -mb-px ${activeTab === t.id ? 'border-primary text-primary' : 'border-transparent text-muted hover:text-foreground'}`}
+          >
+            {t.label} <span className="ml-2 text-[10px] bg-surface px-2 py-0.5 rounded-full">{t.count}</span>
+          </button>
         ))}
-
       </div>
+
+      {activeTab === 'active' && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {pipeline.length === 0 && (
+            <div className="col-span-full text-center py-16 text-muted">
+              <FileText className="w-12 h-12 mx-auto mb-3 opacity-40" />
+              <p className="font-bold">No active leads</p>
+              <p className="text-xs mt-1">Click "Ingest New Packet" to begin a clinical audit.</p>
+            </div>
+          )}
+          {pipeline.map(lead => (
+            <div key={lead.id} className="glass-card p-6 border-l-4 border-indigo-500 hover:shadow-xl transition-all">
+              <h3 className="font-bold text-lg">{lead.identity?.name || lead.name || 'Anonymous'}</h3>
+              <p className="text-xs text-indigo-500 font-bold mb-4 uppercase tracking-widest">{homeData?.state || stateData.name} Compliance</p>
+              <button onClick={() => {
+                setSelectedLeadId(lead.id);
+                setLeadForm({ ..._leadForm, ...lead });
+                setRcfemScores(lead.rcfemScores || { clinical: 0, safety: 0, personCentered: 0, operational: 0, observation: 0, alignment: 0 });
+                setRcfemRationales(lead.rcfemRationales || { clinical: '', safety: '', personCentered: '', operational: '', observation: '', alignment: '' });
+                setPart2Observations(lead.part2Observations || { physical: '', cognitive: '', communication: '', social: '', environmental: '' });
+                setReviewStep(1);
+                setActiveModal('review');
+              }} className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-bold text-xs">
+                Review RCFEM Audit
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {(activeTab === 'declined' || activeTab === 'referred') && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {declinedLeads.filter(d => activeTab === 'referred' ? d.status === 'referred' : d.status !== 'referred').length === 0 && (
+            <div className="col-span-full text-center py-16 text-muted">
+              <Hospital className="w-12 h-12 mx-auto mb-3 opacity-40" />
+              <p className="font-bold">{activeTab === 'referred' ? 'No referrals yet' : 'No declined admissions'}</p>
+              <p className="text-xs mt-1">{activeTab === 'referred' ? 'Declined leads referred to other facilities appear here.' : 'Residents declined as unfit for home care appear here.'}</p>
+            </div>
+          )}
+          {declinedLeads
+            .filter(d => activeTab === 'referred' ? d.status === 'referred' : d.status !== 'referred')
+            .map(lead => (
+              <div key={lead.id} className={`glass-card p-6 border-l-4 ${lead.status === 'referred' ? 'border-emerald-500' : 'border-rose-500'} hover:shadow-xl transition-all`}>
+                <div className="flex justify-between items-start mb-2">
+                  <h3 className="font-bold text-lg">{lead.identity?.name || lead.name || 'Anonymous'}</h3>
+                  <span className={`text-[9px] font-bold uppercase px-2 py-1 rounded ${lead.status === 'referred' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
+                    {lead.status === 'referred' ? 'Referred' : 'Declined'}
+                  </span>
+                </div>
+                {lead.aiSnapshot?.recommendation && (
+                  <p className="text-[10px] text-muted uppercase font-bold tracking-widest mb-2">AI: {lead.aiSnapshot.recommendation}</p>
+                )}
+                {lead.declineReason && (
+                  <p className="text-xs text-slate-600 mb-3 line-clamp-3"><span className="font-bold">Reason:</span> {lead.declineReason}</p>
+                )}
+                {lead.status === 'referred' && lead.referredTo && (
+                  <div className="mb-3 p-2 bg-emerald-50 border border-emerald-200 rounded text-xs">
+                    <p className="font-bold text-emerald-700">Referred to: {lead.referredTo.name}</p>
+                    {lead.referredTo.email && <p className="text-emerald-600">{lead.referredTo.email}</p>}
+                  </div>
+                )}
+                {Array.isArray(lead.aiSnapshot?.risks) && lead.aiSnapshot.risks.length > 0 && (
+                  <details className="text-xs text-slate-600 mb-3">
+                    <summary className="cursor-pointer font-bold">{lead.aiSnapshot.risks.length} documented risks</summary>
+                    <ul className="mt-2 space-y-1 pl-3">
+                      {lead.aiSnapshot.risks.map((r, i) => <li key={i} className="list-disc">{r}</li>)}
+                    </ul>
+                  </details>
+                )}
+                {lead.status !== 'referred' && (
+                  <button
+                    onClick={() => { setReferralTarget(lead); setError(null); }}
+                    className="w-full px-4 py-2 bg-rose-600 text-white rounded-lg font-bold text-xs flex items-center justify-center gap-2 hover:bg-rose-700 transition-colors"
+                  >
+                    <Hospital className="w-3 h-3" /> Refer to Nursing Facility
+                  </button>
+                )}
+              </div>
+            ))}
+        </div>
+      )}
 
       {activeModal === 'upload' && (
         <div className="fixed inset-0 z-[9999] bg-surface flex flex-col p-12 overflow-y-auto">
@@ -1244,6 +1450,90 @@ Administrator: ____________________ Date: __________`;
               >
                 {declining ? 'Documenting…' : 'Confirm Decline'}
               </button>
+            </footer>
+          </div>
+        </div>
+      )}
+
+      {referralTarget && (
+        <div className="fixed inset-0 z-[10000] bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-8">
+          <div className="bg-white max-w-3xl w-full rounded-3xl shadow-2xl overflow-hidden">
+            <header className="px-8 py-6 bg-indigo-50 border-b border-indigo-200 flex items-start justify-between gap-4">
+              <div>
+                <h3 className="text-2xl font-black text-indigo-800 flex items-center gap-2">
+                  <Hospital className="w-7 h-7" /> Refer to Nursing Facility
+                </h3>
+                <p className="text-sm text-indigo-700 mt-1">Generate a referral packet for {referralTarget.identity?.name || referralTarget.name || 'this resident'} and forward to a higher-acuity facility.</p>
+              </div>
+              <button onClick={() => { setReferralTarget(null); setReferralFacility({ name: '', email: '', phone: '', notes: '' }); }} className="text-indigo-700 hover:bg-indigo-100 rounded-full p-2">
+                <X className="w-5 h-5" />
+              </button>
+            </header>
+            <div className="p-8 grid grid-cols-2 gap-4">
+              <div>
+                <label className="text-[10px] font-bold uppercase text-muted">Receiving Facility Name *</label>
+                <input
+                  type="text"
+                  value={referralFacility.name}
+                  onChange={e => setReferralFacility({ ...referralFacility, name: e.target.value })}
+                  placeholder="e.g. Enumclaw Health and Rehab SNF"
+                  className="w-full mt-2 p-3 bg-white border-2 border-slate-300 rounded-xl text-sm outline-none focus:border-indigo-400"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold uppercase text-muted">Contact Email</label>
+                <input
+                  type="email"
+                  value={referralFacility.email}
+                  onChange={e => setReferralFacility({ ...referralFacility, email: e.target.value })}
+                  placeholder="admissions@facility.org"
+                  className="w-full mt-2 p-3 bg-white border-2 border-slate-300 rounded-xl text-sm outline-none focus:border-indigo-400"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold uppercase text-muted">Contact Phone</label>
+                <input
+                  type="tel"
+                  value={referralFacility.phone}
+                  onChange={e => setReferralFacility({ ...referralFacility, phone: e.target.value })}
+                  placeholder="(555) 555-0100"
+                  className="w-full mt-2 p-3 bg-white border-2 border-slate-300 rounded-xl text-sm outline-none focus:border-indigo-400"
+                />
+              </div>
+              <div className="col-span-2">
+                <label className="text-[10px] font-bold uppercase text-muted">Additional Notes (optional)</label>
+                <textarea
+                  value={referralFacility.notes}
+                  onChange={e => setReferralFacility({ ...referralFacility, notes: e.target.value })}
+                  placeholder="Anything specific you want the receiving facility to know."
+                  className="w-full mt-2 p-3 bg-white border-2 border-slate-300 rounded-xl text-sm min-h-[80px] outline-none focus:border-indigo-400"
+                />
+              </div>
+              <div className="col-span-2 p-4 bg-slate-50 border border-slate-200 rounded-xl">
+                <p className="text-[10px] font-bold uppercase text-muted mb-2">Referral Packet Preview</p>
+                <pre className="text-[11px] text-slate-700 whitespace-pre-wrap font-sans max-h-64 overflow-y-auto">{buildReferralSummary(referralTarget, referralFacility)}</pre>
+              </div>
+              {error && (
+                <div className="col-span-2 p-3 bg-rose-50 border border-rose-300 rounded-lg text-xs text-rose-700">{error}</div>
+              )}
+            </div>
+            <footer className="px-8 py-5 bg-slate-50 border-t flex items-center justify-between">
+              <p className="text-[10px] text-muted">
+                {referralFacility.email
+                  ? <><Mail className="w-3 h-3 inline mr-1" /> Will open your email client pre-filled.</>
+                  : 'No email entered — packet saved to record only.'}
+              </p>
+              <div className="flex gap-3">
+                <button onClick={() => { setReferralTarget(null); setReferralFacility({ name: '', email: '', phone: '', notes: '' }); }} className="px-6 py-3 border rounded-2xl font-bold hover:bg-white">Cancel</button>
+                <button
+                  onClick={handleReferToSNF}
+                  disabled={referring || !referralFacility.name?.trim()}
+                  className="px-8 py-3 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-500/20 disabled:opacity-50 flex items-center gap-2"
+                >
+                  <Send className="w-4 h-4" />
+                  {referring ? 'Sending…' : 'Send Referral'}
+                </button>
+              </div>
             </footer>
           </div>
         </div>
