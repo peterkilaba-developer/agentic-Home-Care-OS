@@ -17,16 +17,19 @@ service firebase.storage {
       return firestore.get(userPath()).data;
     }
 
+    // Super-admin check uses Firebase custom claims (set server-side only via Admin SDK).
+    // Never hardcode emails here — they cannot be rotated without a rules redeploy.
     function isSuperAdmin() {
-      return isSignedIn() &&
-        (request.auth.token.email == 'admin@agentic.com' ||
-          request.auth.token.email == 'superadmin@homecare.com');
+      return isSignedIn() && (
+        request.auth.token.get('superAdmin', false) == true ||
+        (hasUserDoc() && userData().isSuperAdmin == true && userData().role == 'admin')
+      );
     }
 
     function canAccessHome(homeId) {
       return isSuperAdmin() ||
         (isSignedIn() && homeId == request.auth.uid) ||
-        (hasUserDoc() && userData().homeId == homeId);
+        (hasUserDoc() && (userData().homeId == homeId || userData().activeHomeId == homeId));
     }
 
     match /intakes/{homeId}/{residentId}/{allPaths=**} {
