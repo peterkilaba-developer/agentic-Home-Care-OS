@@ -6,6 +6,343 @@ import { httpsCallable } from 'firebase/functions';
 import { collection, addDoc, doc, serverTimestamp, deleteDoc, setDoc } from 'firebase/firestore';
 import { functions, db } from '../../firebase';
 import { calculateTotalFitScore } from '../../utils/compliance';
+import { getStateCompliance, validateCarePlanForState } from '../../utils/stateCompliance';
+import { CLINICAL_SCHEMA, matchHomeToNeeds } from '../../utils/clinicalSchema';
+
+function Field({ label, value }) {
+  const display = value === '' || value === null || value === undefined || (Array.isArray(value) && value.length === 0)
+    ? <span className="text-muted italic">—</span>
+    : Array.isArray(value)
+      ? value.join(', ')
+      : typeof value === 'boolean'
+        ? (value ? 'Yes' : 'No')
+        : String(value);
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-[9px] font-bold text-indigo-400 uppercase tracking-tighter">{label}</span>
+      <span className="text-[11px] font-medium text-slate-800 break-words">{display}</span>
+    </div>
+  );
+}
+
+function Section({ title, children, color = 'indigo' }) {
+  const ring = { indigo: 'border-indigo-200', rose: 'border-rose-200', amber: 'border-amber-200', emerald: 'border-emerald-200', slate: 'border-slate-200' }[color] || 'border-indigo-200';
+  const title_color = { indigo: 'text-indigo-600', rose: 'text-rose-600', amber: 'text-amber-700', emerald: 'text-emerald-600', slate: 'text-slate-600' }[color] || 'text-indigo-600';
+  return (
+    <div className={`rounded-xl border ${ring} bg-white/60 p-4`}>
+      <h6 className={`text-[10px] font-black uppercase tracking-widest mb-3 ${title_color}`}>{title}</h6>
+      {children}
+    </div>
+  );
+}
+
+function ExtractionMirror({ lead, rcfemScores, setRcfemScores, rcfemRationales, setRcfemRationales }) {
+  const id = lead.identity || {};
+  const dx = lead.diagnoses || {};
+  const adls = lead.adls || {};
+  const iadls = lead.iadls || {};
+  const cog = lead.cognitive || {};
+  const safety = lead.safety || {};
+  const diet = lead.dietary || {};
+  const ad = lead.advanceDirectives || {};
+  const ins = lead.insurance || {};
+  const contacts = lead.contacts || {};
+  const meds = Array.isArray(lead.medications) ? lead.medications : [];
+  const allergies = lead.allergies || {};
+
+  return (
+    <div className="glass-card p-6 border-indigo-500/20 bg-indigo-500/5">
+      <div className="flex items-center justify-between mb-4">
+        <h5 className="text-xs font-black flex items-center gap-2 text-indigo-600 uppercase tracking-widest">EXTRACTION MIRROR: {(id.name || lead.name || 'Resident').toUpperCase()}</h5>
+        <span className="text-[9px] font-bold text-muted uppercase">Source: Clinical Packet</span>
+      </div>
+
+      <div className="space-y-3">
+        <Section title="Identity">
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Full Name" value={id.name || lead.name} />
+            <Field label="DOB" value={id.dob || lead.dob} />
+            <Field label="Age" value={id.age} />
+            <Field label="Sex" value={id.sex} />
+            <Field label="Preferred Name" value={id.preferredName} />
+            <Field label="Primary Language" value={id.primaryLanguage} />
+          </div>
+        </Section>
+
+        <Section title="Diagnoses">
+          <div className="grid grid-cols-1 gap-2">
+            <Field label="Primary" value={dx.primary || lead.diagnosis} />
+            <Field label="Secondary" value={dx.secondary} />
+            <Field label="Chronic Conditions" value={dx.chronicConditions} />
+            <Field label="ICD-10 Codes" value={dx.icd10Codes} />
+          </div>
+        </Section>
+
+        <Section title={`Medications (${meds.length})`} color="rose">
+          {meds.length === 0 ? <span className="text-[11px] text-muted italic">None extracted</span> : (
+            <div className="overflow-hidden rounded-lg border border-rose-100">
+              <table className="w-full text-[10px]">
+                <thead className="bg-rose-50">
+                  <tr>
+                    <th className="text-left px-2 py-1 font-bold text-rose-700">Drug</th>
+                    <th className="text-left px-2 py-1 font-bold text-rose-700">Dose</th>
+                    <th className="text-left px-2 py-1 font-bold text-rose-700">Freq</th>
+                    <th className="text-left px-2 py-1 font-bold text-rose-700">Route</th>
+                    <th className="text-left px-2 py-1 font-bold text-rose-700">Indication</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {meds.map((m, i) => (
+                    <tr key={i} className="border-t border-rose-100">
+                      <td className="px-2 py-1 font-medium">{m.name || '—'}</td>
+                      <td className="px-2 py-1">{m.dosage || '—'}</td>
+                      <td className="px-2 py-1">{m.frequency || '—'}</td>
+                      <td className="px-2 py-1">{m.route || '—'}</td>
+                      <td className="px-2 py-1">{m.indication || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Section>
+
+        <Section title="Allergies" color="rose">
+          <div className="grid grid-cols-3 gap-3">
+            <Field label="Drug" value={allergies.drug} />
+            <Field label="Food" value={allergies.food} />
+            <Field label="Environmental" value={allergies.environmental} />
+          </div>
+        </Section>
+
+        <Section title="ADLs">
+          <div className="grid grid-cols-4 gap-3">
+            <Field label="Bathing" value={adls.bathing} />
+            <Field label="Dressing" value={adls.dressing} />
+            <Field label="Grooming" value={adls.grooming} />
+            <Field label="Toileting" value={adls.toileting} />
+            <Field label="Transferring" value={adls.transferring} />
+            <Field label="Eating" value={adls.eating} />
+            <Field label="Continence" value={adls.continence} />
+            <Field label="Mobility" value={adls.mobility} />
+          </div>
+        </Section>
+
+        <Section title="IADLs">
+          <div className="grid grid-cols-3 gap-3">
+            <Field label="Medication" value={iadls.medication} />
+            <Field label="Finances" value={iadls.finances} />
+            <Field label="Transportation" value={iadls.transportation} />
+            <Field label="Housekeeping" value={iadls.housekeeping} />
+            <Field label="Meal Prep" value={iadls.mealPrep} />
+            <Field label="Phone" value={iadls.phone} />
+          </div>
+        </Section>
+
+        <Section title="Cognitive & Behavioral" color="amber">
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Status" value={cog.status} />
+            <Field label="Diagnosis" value={cog.diagnosis} />
+            <Field label="Behaviors" value={cog.behaviors} />
+            <Field label="Mood/Affect" value={cog.moodAffect} />
+          </div>
+        </Section>
+
+        <Section title="Safety" color="rose">
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Fall History" value={safety.fallHistory} />
+            <Field label="Fall Risk" value={safety.fallRisk} />
+            <Field label="Wandering" value={safety.wandering} />
+            <Field label="Elopement Risk" value={safety.elopementRisk} />
+            <Field label="Aggression" value={safety.aggression} />
+            <Field label="Self Harm" value={safety.selfHarm} />
+          </div>
+        </Section>
+
+        <Section title="Dietary" color="emerald">
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Diet" value={diet.diet} />
+            <Field label="Restrictions" value={diet.restrictions} />
+            <Field label="Swallowing" value={diet.swallowingPrecautions} />
+            <Field label="Fluid Restriction" value={diet.fluidRestriction} />
+          </div>
+        </Section>
+
+        <Section title="Advance Directives" color="slate">
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Code Status" value={ad.codeStatus} />
+            <Field label="POLST on File" value={ad.polst} />
+            <Field label="Healthcare Proxy" value={ad.healthcareProxy} />
+            <Field label="Living Will" value={ad.livingWill} />
+          </div>
+        </Section>
+
+        <Section title="Insurance" color="slate">
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Primary" value={ins.primary} />
+            <Field label="Secondary" value={ins.secondary} />
+            <Field label="Medicare #" value={ins.medicareNumber} />
+            <Field label="Medicaid #" value={ins.medicaidNumber} />
+          </div>
+        </Section>
+
+        <Section title="Contacts" color="slate">
+          <div className="grid grid-cols-3 gap-3">
+            <Field label="Primary MD" value={`${contacts.primaryPhysician?.name || ''} ${contacts.primaryPhysician?.phone ? '· ' + contacts.primaryPhysician.phone : ''}`.trim()} />
+            <Field label="Emergency Contact" value={`${contacts.emergencyContact?.name || ''}${contacts.emergencyContact?.relation ? ' (' + contacts.emergencyContact.relation + ')' : ''}${contacts.emergencyContact?.phone ? ' · ' + contacts.emergencyContact.phone : ''}`.trim()} />
+            <Field label="Power of Attorney" value={`${contacts.powerOfAttorney?.name || ''} ${contacts.powerOfAttorney?.phone ? '· ' + contacts.powerOfAttorney.phone : ''}`.trim()} />
+          </div>
+        </Section>
+
+        {lead.clinicalNotes && (
+          <Section title="Narrative Notes">
+            <p className="text-[11px] text-slate-700 whitespace-pre-wrap">{lead.clinicalNotes}</p>
+          </Section>
+        )}
+      </div>
+
+      <div className="mt-6 pt-6 border-t border-indigo-100 space-y-4">
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">Clinical Match Score</span>
+          <input type="range" min="0" max="100" value={rcfemScores.clinical} onChange={e => setRcfemScores({...rcfemScores, clinical: parseInt(e.target.value)})} className="w-1/2 h-1.5 bg-indigo-100 rounded-lg appearance-none cursor-pointer accent-indigo-600" />
+        </div>
+        <textarea
+          value={rcfemRationales.clinical}
+          onChange={e => setRcfemRationales({...rcfemRationales, clinical: e.target.value})}
+          placeholder="Rationale for clinical score..."
+          className="w-full p-2 bg-indigo-50/30 border border-indigo-100 rounded-lg text-[10px] outline-none"
+        />
+      </div>
+    </div>
+  );
+}
+
+function recommendationStyle(rec) {
+  const r = (rec || '').toLowerCase();
+  if (r.includes('decline') || r.includes('not appropriate') || r.includes('unfit')) {
+    return { badge: 'bg-rose-500 text-white', card: 'bg-rose-50/40 border-rose-300', title: 'text-rose-700', body: 'text-rose-900', label: 'DECLINE' };
+  }
+  if (r.includes('condition') || r.includes('caveat') || r.includes('high risk')) {
+    return { badge: 'bg-amber-500 text-white', card: 'bg-amber-50/40 border-amber-300', title: 'text-amber-700', body: 'text-amber-900', label: 'ACCEPT WITH CONDITIONS' };
+  }
+  if (!rec) {
+    return { badge: 'bg-slate-400 text-white', card: 'bg-slate-50 border-slate-300', title: 'text-slate-600', body: 'text-slate-800', label: 'PENDING' };
+  }
+  return { badge: 'bg-emerald-500 text-white', card: 'bg-emerald-50/40 border-emerald-300', title: 'text-emerald-700', body: 'text-emerald-900', label: 'ACCEPT' };
+}
+
+function AIFitAnalysisCard({ lead }) {
+  const fit = lead.fitDetermination || {};
+  const style = recommendationStyle(fit.recommendation);
+  const feasibleKnown = typeof fit.feasible === 'boolean';
+  const risks = Array.isArray(fit.risks) ? fit.risks.filter(Boolean) : [];
+
+  return (
+    <div className={`glass-card p-6 border ${style.card}`}>
+      <div className="flex items-center justify-between mb-4">
+        <h5 className={`text-[10px] font-bold uppercase tracking-widest ${style.title}`}>AI Fit Analysis</h5>
+        <span className={`text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-tighter ${style.badge}`}>{style.label}</span>
+      </div>
+      {feasibleKnown && (
+        <div className="flex items-center gap-2 mb-3">
+          <span className={`text-[9px] font-bold uppercase ${fit.feasible ? 'text-emerald-600' : 'text-rose-600'}`}>Clinically Feasible:</span>
+          <span className={`text-[9px] font-bold px-2 py-0.5 rounded ${fit.feasible ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>{fit.feasible ? 'Yes' : 'No'}</span>
+        </div>
+      )}
+      <p className={`text-sm font-bold ${style.body}`}>{fit.reasoning || 'Awaiting AI analysis.'}</p>
+      {risks.length > 0 && (
+        <div className="mt-4 pt-4 border-t border-slate-200/60">
+          <p className="text-[9px] font-bold uppercase text-slate-600 mb-2">Documented Risks ({risks.length})</p>
+          <ul className="space-y-1">
+            {risks.map((r, i) => (
+              <li key={i} className="flex items-start gap-2 text-[11px] text-slate-700">
+                <AlertTriangle className="w-3 h-3 text-rose-500 flex-shrink-0 mt-0.5" />
+                <span>{r}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {feasibleKnown && !fit.feasible && (
+        <div className="mt-4 p-3 bg-rose-100/60 border border-rose-300 rounded-lg">
+          <p className="text-[10px] font-bold text-rose-700">⚠ AI flagged this resident as clinically infeasible for this facility type. Admission requires explicit override and capability-gap mitigation.</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FacilityMatchPanel({ lead, homeData, residents }) {
+  const match = matchHomeToNeeds(homeData, lead, residents);
+  const capacityColor = match.capacityOk ? 'emerald' : 'rose';
+  const allMet = match.gaps.length === 0;
+
+  return (
+    <div className={`glass-card p-6 border-2 ${allMet && match.capacityOk ? 'border-emerald-300 bg-emerald-50/30' : 'border-amber-300 bg-amber-50/30'}`}>
+      <div className="flex items-center justify-between mb-4">
+        <h5 className="text-xs font-black uppercase tracking-widest text-slate-700">Facility Match — Needs vs. Capability & Capacity</h5>
+        <span className={`text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-tighter ${match.overallFit ? 'bg-emerald-500 text-white' : 'bg-amber-500 text-white'}`}>
+          {match.overallFit ? 'Match' : 'Review'}
+        </span>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <p className="text-[10px] font-bold text-emerald-700 uppercase mb-2">Required Capabilities — Met ({match.met.length})</p>
+          {match.met.length === 0 ? (
+            <p className="text-[11px] text-muted italic">None inferred from extraction.</p>
+          ) : (
+            <ul className="space-y-1">
+              {match.met.map(m => (
+                <li key={m.capability} className="flex items-center gap-2 text-[11px]">
+                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                  <span className="font-medium">{m.label}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div>
+          <p className="text-[10px] font-bold text-rose-700 uppercase mb-2">Capability Gaps ({match.gaps.length})</p>
+          {match.gaps.length === 0 ? (
+            <p className="text-[11px] text-emerald-700 font-medium">All required capabilities are licensed at this facility.</p>
+          ) : (
+            <ul className="space-y-1">
+              {match.gaps.map(g => (
+                <li key={g.capability} className="flex items-center gap-2 text-[11px]">
+                  <AlertTriangle className="w-3 h-3 text-rose-600" />
+                  <span className="font-medium">{g.label}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+
+      <div className="mt-4 pt-4 border-t border-slate-200 grid grid-cols-3 gap-4">
+        <div>
+          <p className="text-[9px] font-bold text-muted uppercase">Bed Capacity</p>
+          <p className={`text-sm font-black text-${capacityColor}-700`}>{match.occupied} / {match.capacity || '—'}</p>
+        </div>
+        <div>
+          <p className="text-[9px] font-bold text-muted uppercase">Capacity Status</p>
+          <p className={`text-sm font-bold text-${capacityColor}-700`}>{match.capacityOk ? 'Bed Available' : 'At Capacity'}</p>
+        </div>
+        <div>
+          <p className="text-[9px] font-bold text-muted uppercase">Recommendation</p>
+          <p className="text-sm font-bold text-slate-800">{match.overallFit ? 'Proceed to Care Plan' : 'Mitigate Gaps First'}</p>
+        </div>
+      </div>
+
+      {match.gaps.length > 0 && (
+        <p className="mt-3 text-[10px] text-amber-700 italic">
+          Capability gaps must be mitigated via RN delegation, contract services, or external agency before admission. The generated care plan will explicitly address each gap.
+        </p>
+      )}
+    </div>
+  );
+}
 
 export default function IntakePipelineView({ pipeline, stateData, homeData, residents, createSystemLog, selectedHomeId, impersonatingId, isLocalDemo, saveLocalPipelineLead, admitLocalResident, discardLocalPipelineLead }) {
   const [activeModal, setActiveModal] = useState(null); 
@@ -82,43 +419,97 @@ export default function IntakePipelineView({ pipeline, stateData, homeData, resi
           result = {
             data: {
               extracted: {
-                name: 'James AX',
-                dob: '05/12/1945',
-                diagnosis: 'Vascular Dementia, Hypertension, T2DM',
+                identity: { name: 'James AX', dob: '05/12/1945', age: 80, sex: 'M', preferredName: 'Jim', primaryLanguage: 'English' },
+                diagnoses: { primary: 'Vascular Dementia', secondary: ['Hypertension', 'Type 2 Diabetes Mellitus'], chronicConditions: ['Osteoarthritis'], icd10Codes: ['F01.50', 'I10', 'E11.9'] },
                 medications: [
-                  { name: 'Donepezil', dosage: '10mg', frequency: 'Daily' },
-                  { name: 'Lisinopril', dosage: '20mg', frequency: 'Daily' }
+                  { name: 'Donepezil', dosage: '10mg', frequency: 'Daily', route: 'PO', indication: 'Dementia', prescriber: 'Dr. Chen' },
+                  { name: 'Lisinopril', dosage: '20mg', frequency: 'Daily', route: 'PO', indication: 'HTN', prescriber: 'Dr. Chen' },
+                  { name: 'Metformin', dosage: '500mg', frequency: 'BID', route: 'PO', indication: 'T2DM', prescriber: 'Dr. Chen' }
                 ],
-                adls: { bathing: 'Assist', dressing: 'Assist', mobility: 'Independent' },
-                fitDetermination: { feasible: true, recommendation: 'Accept', reasoning: 'Standard clinical fit for ALH.', risks: ['Fall risk due to dementia'] }
+                allergies: { drug: ['Penicillin'], food: [], environmental: [] },
+                adls: { bathing: 'Assist', dressing: 'Assist', grooming: 'Supervision', toileting: 'Supervision', transferring: 'Independent', eating: 'Independent', continence: 'Occasional', mobility: 'Walker' },
+                iadls: { medication: 'Dependent', finances: 'Dependent', transportation: 'Dependent', housekeeping: 'Dependent', mealPrep: 'Dependent', phone: 'Assist' },
+                cognitive: { status: 'Moderate Impairment', diagnosis: 'Vascular Dementia', behaviors: ['sundowning'], moodAffect: 'Pleasant, occasionally anxious' },
+                safety: { fallHistory: '2 falls in past 6 months, no injury', fallRisk: 'High', wandering: true, elopementRisk: false, aggression: '', selfHarm: false },
+                dietary: { diet: 'Regular', restrictions: ['Low sodium'], swallowingPrecautions: 'None', fluidRestriction: '' },
+                advanceDirectives: { codeStatus: 'DNR', polst: true, healthcareProxy: 'Daughter, Marie AX', livingWill: true },
+                insurance: { primary: 'Medicare A+B', secondary: 'BCBS Supplemental', medicareNumber: '1AB2-CD3-EF45', medicaidNumber: '' },
+                contacts: {
+                  primaryPhysician: { name: 'Dr. Linda Chen', phone: '555-201-3344' },
+                  emergencyContact: { name: 'Marie AX', relation: 'Daughter', phone: '555-882-1100' },
+                  powerOfAttorney: { name: 'Marie AX', phone: '555-882-1100' }
+                },
+                clinicalNotes: 'Pleasant gentleman, mobile with walker. Cooperates with cares. Family requests female caregivers when possible.',
+                fitDetermination: { feasible: true, recommendation: 'Accept', reasoning: 'Standard clinical fit for AFH with dementia and diabetic management capabilities.', risks: ['Fall risk due to dementia', 'Wandering at sundown'] }
               }
             }
           };
           await new Promise(r => setTimeout(r, 2000));
         } else {
-          result = await clinicalAgent({ 
-            intent: 'intake', 
-            messages: [{ role: 'user', content: `Analyze this clinical packet for a new resident admission in ${homeData?.state || stateData.name} using the RCFEM framework. Evaluate Stage 1-4 for Part 1.` }],
+          const stateCfg = getStateCompliance(homeData?.state || stateData.code || stateData.name);
+          result = await clinicalAgent({
+            intent: 'intake',
+            messages: [{ role: 'user', content: `Analyze this clinical packet for a new resident admission in ${stateCfg.name} using the RCFEM framework. Evaluate Stage 1-4 for Part 1.` }],
             document: { data: base64, mimeType: file.type },
-            stateName: homeData?.state || stateData.name
+            stateName: stateCfg.name,
+            stateCompliance: stateCfg
           });
         }
         
+        if (result.data?.error) {
+          console.error('[INTAKE] Backend error:', result.data.error, 'snippet:', result.data.rawSnippet);
+          setError(result.data.error);
+          setTerminalLogs(prev => [...prev, `ERROR: ${result.data.error}`]);
+          setParsing(false);
+          return;
+        }
         const ext = result.data.extracted || {};
+        console.log('[INTAKE] extracted keys:', Object.keys(ext), 'finishReason:', result.data.finishReason);
+        if (Object.keys(ext).length === 0) {
+          setError('AI returned no structured data. Check the document is a readable clinical packet and try again.');
+          setTerminalLogs(prev => [...prev, 'ERROR: Extraction returned empty payload.']);
+          setParsing(false);
+          return;
+        }
+        // Defensive: if Gemini returns flat shape instead of nested, normalize.
+        const flatDx = typeof ext.diagnosis === 'string' ? ext.diagnosis : '';
+        const id = ext.identity || { name: ext.name || '', dob: ext.dob || '', age: ext.age ?? null, sex: ext.sex || '', preferredName: '', primaryLanguage: '' };
+        const dx = ext.diagnoses || {
+          primary: flatDx ? flatDx.split(',')[0]?.trim() : (ext.diagnosis?.primary || ''),
+          secondary: flatDx ? flatDx.split(',').slice(1).map(s => s.trim()).filter(Boolean) : (ext.diagnosis?.secondary || []),
+          chronicConditions: ext.diagnosis?.chronicConditions || [],
+          icd10Codes: [],
+        };
+        const adls = ext.adls || {};
+        const safety = ext.safety || { fallHistory: ext.fallHistory || '', fallRisk: '', wandering: false, elopementRisk: false, aggression: '', selfHarm: false };
+        const cog = ext.cognitive || {};
+        const primaryDx = dx.primary || (Array.isArray(ext.diagnosis) ? ext.diagnosis.join(', ') : ext.diagnosis) || '';
+        const allDx = [primaryDx, ...(dx.secondary || []), ...(dx.chronicConditions || [])].filter(Boolean).join(', ');
         const nextForm = {
           ..._leadForm,
-          name: ext.name || '',
-          dob: ext.dob || '',
-          diagnosis: Array.isArray(ext.diagnosis) ? ext.diagnosis.join(', ') : (ext.diagnosis || ''),
-          clinicalNotes: ext.clinicalNotes || '',
+          ...CLINICAL_SCHEMA,
+          identity: { ...CLINICAL_SCHEMA.identity, ...id },
+          diagnoses: { ...CLINICAL_SCHEMA.diagnoses, ...dx },
           medications: ext.medications || [],
-          adls: ext.adls || {},
+          allergies: { ...CLINICAL_SCHEMA.allergies, ...(ext.allergies || {}) },
+          adls: { ...CLINICAL_SCHEMA.adls, ...adls },
+          iadls: { ...CLINICAL_SCHEMA.iadls, ...(ext.iadls || {}) },
+          cognitive: { ...CLINICAL_SCHEMA.cognitive, ...cog },
+          safety: { ...CLINICAL_SCHEMA.safety, ...safety },
+          dietary: { ...CLINICAL_SCHEMA.dietary, ...(ext.dietary || {}) },
+          advanceDirectives: { ...CLINICAL_SCHEMA.advanceDirectives, ...(ext.advanceDirectives || {}) },
+          insurance: { ...CLINICAL_SCHEMA.insurance, ...(ext.insurance || {}) },
+          contacts: { ...CLINICAL_SCHEMA.contacts, ...(ext.contacts || {}) },
+          clinicalNotes: ext.clinicalNotes || '',
           fitDetermination: ext.fitDetermination || { feasible: true, recommendation: 'Accept', reasoning: 'Standard fit.', risks: [] },
+          name: id.name || ext.name || '',
+          dob: id.dob || ext.dob || '',
+          diagnosis: allDx,
           rcfem: {
             part1: ext.rcfem?.part1 || {
-              stage1: { clinicalNeeds: ext.diagnosis || '', adls: ext.adls || {}, meds: ext.medications || [] },
-              stage2: { falls: ext.fallHistory || 'None', behavior: 'None documented' },
-              stage3: { lifestyle: 'Pending interview', cultural: 'Default' },
+              stage1: { clinicalNeeds: allDx, adls, meds: ext.medications || [] },
+              stage2: { falls: safety.fallHistory || 'None', behavior: (cog.behaviors || []).join(', ') || 'None documented' },
+              stage3: { lifestyle: 'Pending interview', cultural: id.primaryLanguage || 'Default' },
               stage4: { staffing: 'Standard', financial: 'Private Pay' }
             }
           },
@@ -169,19 +560,30 @@ Safety: Fall precautions in place.`
         };
         await new Promise(r => setTimeout(r, 1500));
       } else {
-        result = await clinicalAgent({ 
-          intent: 'generate_care_plan', 
+        const stateCfg = getStateCompliance(homeData?.state || stateData.code || targetState);
+        const match = matchHomeToNeeds(homeData, _leadForm, residents);
+        result = await clinicalAgent({
+          intent: 'generate_care_plan',
           residentData: _leadForm,
-          stateName: targetState,
-          complianceContext: {
-            law: stateData.complianceLaw,
-            regulator: stateData.regulator,
-            facilityType: stateData.facilityType,
-            shortFacilityType: stateData.shortFacilityType
+          messages: [{ role: 'user', content: `Generate care plan for ${stateCfg.name}.` }],
+          stateName: stateCfg.name,
+          stateCompliance: stateCfg,
+          homeContext: {
+            homeName: homeData?.homeName || homeData?.agencyName || '',
+            licenseNumber: homeData?.licenseNumber || '',
+            capacity: match.capacity,
+            occupied: match.occupied,
+            capabilities: homeData?.capabilities || [],
+            gaps: match.gaps.map(g => g.label)
           }
         });
       }
       const cpText = result.data.choices?.[0]?.message?.content || result.data.carePlan || "Care plan generated.";
+      const validation = validateCarePlanForState(cpText, homeData?.state || stateData.code || targetState);
+      if (!validation.valid) {
+        console.warn('[PIPELINE] Care plan missing state compliance markers:', validation.missing);
+        setError(`Care plan may be missing required state markers: ${validation.missing.join(', ')}. Review carefully before admission.`);
+      }
       setNegotiatedCarePlan(cpText);
       setReviewStep(3);
     } catch (err) { 
@@ -277,7 +679,7 @@ Administrator: ____________________ Date: __________`;
           <h1 className="text-3xl font-bold tracking-tight">Clinical Intake Pipeline</h1>
           <p className="text-muted">State-aligned extraction and facility-fit auditing.</p>
         </div>
-        <button onClick={() => { setActiveModal('upload'); setParsing(false); }} className="bg-primary text-white px-6 py-3 rounded-2xl font-bold shadow-lg shadow-primary/20">
+        <button onClick={() => { setActiveModal('upload'); setParsing(false); setError(null); setTerminalLogs([]); }} className="bg-primary text-white px-6 py-3 rounded-2xl font-bold shadow-lg shadow-primary/20">
           Ingest New Packet
         </button>
       </header>
@@ -315,7 +717,30 @@ Administrator: ____________________ Date: __________`;
               <UploadCloud className="w-20 h-20 mx-auto mb-6 text-indigo-500" />
               <p className="text-xl font-bold">Ingest Packet</p>
             </div>
-            {parsing && <div className="mt-8 p-8 bg-slate-900 text-emerald-400 font-mono text-xs rounded-2xl">{terminalLogs.map((l, i) => <div key={i}>{`> ${l}`}</div>)}</div>}
+            {(parsing || terminalLogs.length > 0) && (
+              <div className="mt-8 p-8 bg-slate-900 font-mono text-xs rounded-2xl">
+                {terminalLogs.map((l, i) => {
+                  const isErr = /^ERROR/i.test(l);
+                  return <div key={i} className={isErr ? 'text-rose-400 font-bold' : 'text-emerald-400'}>{`> ${l}`}</div>;
+                })}
+                {parsing && <div className="text-indigo-300 mt-2 animate-pulse">{`> WORKING...`}</div>}
+              </div>
+            )}
+            {error && (
+              <div className="mt-4 p-4 bg-rose-500/10 border border-rose-500/40 rounded-xl flex items-start gap-3">
+                <AlertTriangle className="w-5 h-5 text-rose-500 flex-shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <p className="text-sm font-bold text-rose-700">Extraction failed</p>
+                  <p className="text-xs text-rose-600 mt-1 whitespace-pre-wrap">{error}</p>
+                  <button
+                    onClick={() => { setError(null); setTerminalLogs([]); }}
+                    className="mt-3 text-xs font-bold text-rose-700 hover:underline"
+                  >
+                    Dismiss and retry
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -362,54 +787,13 @@ Administrator: ____________________ Date: __________`;
                          <span className="text-[10px] font-bold bg-indigo-100 text-indigo-600 px-2 py-1 rounded">STATE: {homeData?.state || stateData.name}</span>
                       </div>
 
-                      <div className="glass-card p-6 bg-emerald-500/5 border-emerald-500/20">
-                         <div className="flex items-center justify-between mb-4">
-                            <h5 className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">AI Fit Analysis</h5>
-                            <span className="text-[10px] font-bold bg-emerald-500 text-white px-3 py-1 rounded-full uppercase tracking-tighter">Accept</span>
-                         </div>
-                         <p className="text-sm font-bold text-emerald-900">{_leadForm.fitDetermination?.reasoning || 'Standard clinical fit.'}</p>
-                      </div>
+                      <AIFitAnalysisCard lead={_leadForm} />
 
-                      {/* Stage 1: Clinical Needs */}
-                      <div className="glass-card p-6 border-indigo-500/20 bg-indigo-500/5">
-                        <div className="flex items-center justify-between mb-6">
-                           <h5 className="text-xs font-black flex items-center gap-2 text-indigo-600 uppercase tracking-widest">EXTRACTION MIRROR: {(_leadForm.name || 'Resident').toUpperCase()}</h5>
-                           <span className="text-[9px] font-bold text-muted uppercase">Source: Clinical Packet</span>
-                        </div>
-                        
-                        <div className="grid grid-cols-2 gap-4 mb-6">
-                          <div className="p-4 bg-white/50 rounded-2xl border border-indigo-100 shadow-sm">
-                            <p className="text-[10px] font-bold text-indigo-400 uppercase mb-1 tracking-tighter">Primary Clinical Diagnosis</p>
-                            <p className="text-sm font-bold text-slate-800">{typeof _leadForm.diagnosis === 'object' ? (_leadForm.diagnosis.primary || JSON.stringify(_leadForm.diagnosis)) : (_leadForm.diagnosis || 'Pending Assessment')}</p>
-                          </div>
-                          <div className="p-4 bg-white/50 rounded-2xl border border-indigo-100 shadow-sm">
-                            <p className="text-[10px] font-bold text-indigo-400 uppercase mb-1 tracking-tighter">Medication Profile</p>
-                            <p className="text-sm font-bold text-slate-800">{Array.isArray(_leadForm.medications) ? `${_leadForm.medications.length} Prescriptions Extracted` : 'Review Required'}</p>
-                          </div>
-                        </div>
+                      {/* Stage 1: Comprehensive Clinical Extraction */}
+                      <ExtractionMirror lead={_leadForm} rcfemScores={rcfemScores} setRcfemScores={setRcfemScores} rcfemRationales={rcfemRationales} setRcfemRationales={setRcfemRationales} />
 
-                        <div className="grid grid-cols-3 gap-3">
-                          {['ADLs', 'Allergies', 'Identity'].map(tag => (
-                            <div key={tag} className="flex items-center gap-2 px-3 py-2 bg-indigo-500/10 rounded-xl">
-                              <div className="w-1.5 h-1.5 rounded-full bg-indigo-500" />
-                              <span className="text-[10px] font-bold text-indigo-600 uppercase">{tag} VERIFIED</span>
-                            </div>
-                          ))}
-                        </div>
-
-                        <div className="mt-6 pt-6 border-t border-indigo-100 space-y-4">
-                           <div className="flex items-center justify-between">
-                             <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">Clinical Match Score</span>
-                             <input type="range" min="0" max="100" value={rcfemScores.clinical} onChange={e => setRcfemScores({...rcfemScores, clinical: parseInt(e.target.value)})} className="w-1/2 h-1.5 bg-indigo-100 rounded-lg appearance-none cursor-pointer accent-indigo-600" />
-                           </div>
-                           <textarea 
-                             value={rcfemRationales.clinical} 
-                             onChange={e => setRcfemRationales({...rcfemRationales, clinical: e.target.value})}
-                             placeholder="Rationale for clinical score..."
-                             className="w-full p-2 bg-indigo-50/30 border border-indigo-100 rounded-lg text-[10px] outline-none"
-                           />
-                        </div>
-                      </div>
+                      {/* Facility Match: needs vs. home capabilities & capacity */}
+                      <FacilityMatchPanel lead={_leadForm} homeData={homeData} residents={residents} />
 
                       {/* Stage 2 & 3 Condensed for Review */}
                       <div className="grid grid-cols-2 gap-4">
@@ -546,15 +930,58 @@ Administrator: ____________________ Date: __________`;
 
                   {reviewStep === 4 && (
                     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
+                      {(() => {
+                        const rec = (_leadForm.fitDetermination?.recommendation || '').toLowerCase();
+                        const aiDeclined = rec.includes('decline') || rec.includes('not appropriate') || _leadForm.fitDetermination?.feasible === false;
+                        const humanAllows = calculateTotalScore() > 51;
+                        if (aiDeclined && humanAllows) {
+                          return (
+                            <div className="glass-card p-5 border-2 border-rose-400 bg-rose-50/60 flex items-start gap-3">
+                              <AlertTriangle className="w-6 h-6 text-rose-600 flex-shrink-0" />
+                              <div className="flex-1">
+                                <p className="text-sm font-black text-rose-700 uppercase">AI vs Human Score Conflict</p>
+                                <p className="text-xs text-rose-700 mt-1">
+                                  The AI clinical analysis recommends <span className="font-bold">{_leadForm.fitDetermination?.recommendation || 'Decline'}</span>
+                                  {' '}but your RCFEM score ({calculateTotalScore()}%) permits admission.
+                                  Document your override reasoning in the administrator signature field below.
+                                </p>
+                                {Array.isArray(_leadForm.fitDetermination?.risks) && _leadForm.fitDetermination.risks.length > 0 && (
+                                  <ul className="mt-2 text-[11px] text-rose-700 list-disc list-inside">
+                                    {_leadForm.fitDetermination.risks.map((r, i) => <li key={i}>{r}</li>)}
+                                  </ul>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        }
+                        return null;
+                      })()}
                       <div className="glass-card p-8 text-center bg-gradient-to-br from-white to-indigo-50/30">
                         <h4 className="text-3xl font-black mb-2">Admission Decision</h4>
-                        <div className="mt-8 mb-12">
+                        <div className="mt-4 mb-6 flex flex-col items-center gap-3">
+                          <div className="flex items-center gap-6">
+                            <div className="text-center">
+                              <p className="text-[10px] font-bold text-muted uppercase">AI Recommendation</p>
+                              <p className={`text-lg font-black ${recommendationStyle(_leadForm.fitDetermination?.recommendation).title}`}>
+                                {recommendationStyle(_leadForm.fitDetermination?.recommendation).label}
+                              </p>
+                            </div>
+                            <div className="w-px h-12 bg-slate-200" />
+                            <div className="text-center">
+                              <p className="text-[10px] font-bold text-muted uppercase">RCFEM Score (Human)</p>
+                              <p className={`text-lg font-black ${calculateTotalScore() >= 85 ? 'text-emerald-500' : calculateTotalScore() >= 70 ? 'text-indigo-500' : 'text-rose-500'}`}>
+                                {calculateTotalScore()}%
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="mb-12">
                            <div className={`text-6xl font-black mb-4 ${calculateTotalScore() >= 85 ? 'text-emerald-500' : calculateTotalScore() >= 70 ? 'text-indigo-500' : 'text-rose-500'}`}>
                               {calculateTotalScore()}%
                            </div>
                            <div className="inline-block px-4 py-2 rounded-full font-bold uppercase tracking-widest text-xs bg-white shadow-sm border border-border">
-                              {calculateTotalScore() >= 85 ? 'Strong Fit Recommendation' : 
-                               calculateTotalScore() >= 70 ? 'Accept with Care Plan Mods' : 
+                              {calculateTotalScore() >= 85 ? 'Strong Fit Recommendation' :
+                               calculateTotalScore() >= 70 ? 'Accept with Care Plan Mods' :
                                calculateTotalScore() >= 50 ? 'High Risk Admission' : 'Not Appropriate for Placement'}
                            </div>
                         </div>

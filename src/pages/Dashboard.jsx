@@ -23,6 +23,7 @@ import HomeProfileView from '../components/dashboard/Settings';
 import { StaffHRView, TimeEVVView, BillingView, FamilyAccessView } from '../components/dashboard/Operations';
 import BusinessOverview from '../components/dashboard/BusinessOverview';
 import { isLocalDemoEnabled, DEMO_USER, readLocalDemoState, writeLocalDemoState } from '../data/localDemo';
+import { recordImpersonationEvent } from '../utils/impersonationAudit';
 
 export default function Dashboard() {
   const [user, setUser] = useState(null);
@@ -61,7 +62,18 @@ export default function Dashboard() {
   }, []);
 
   const isAdmin = user?.email && ADMIN_EMAILS.includes(user.email);
-  const activeWorkspaceHomeId = impersonatingId || selectedHomeId || activeHomeId;
+  const effectiveImpersonatingId = isAdmin ? impersonatingId : null;
+  const activeWorkspaceHomeId = effectiveImpersonatingId || selectedHomeId || activeHomeId;
+
+  useEffect(() => {
+    if (!isAdmin || !impersonatingId || !user?.uid) return;
+    recordImpersonationEvent({
+      actorUid: user.uid,
+      actorEmail: user.email,
+      targetUid: impersonatingId,
+      source: 'dashboard',
+    });
+  }, [isAdmin, impersonatingId, user?.uid, user?.email]);
 
   useEffect(() => {
     if (!user?.uid) return;
@@ -77,7 +89,7 @@ export default function Dashboard() {
       return;
     }
 
-    const q = query(collection(db, 'homes'), where('ownerId', '==', impersonatingId || user.uid));
+    const q = query(collection(db, 'homes'), where('ownerId', '==', effectiveImpersonatingId || user.uid));
     const unsub = onSnapshot(q, (snapshot) => {
       const homes = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
       setMyHomes(homes);
@@ -90,7 +102,7 @@ export default function Dashboard() {
       setLoading(false);
     });
     return () => unsub();
-  }, [user?.uid, impersonatingId]);
+  }, [user?.uid, effectiveImpersonatingId]);
 
   useEffect(() => {
     if (!activeWorkspaceHomeId) return;
@@ -204,7 +216,7 @@ export default function Dashboard() {
         setSelectedHomeId={setSelectedHomeId}
         isAdmin={isAdmin}
         hasResellerProfile={hasResellerProfile}
-        impersonatingId={impersonatingId}
+        impersonatingId={effectiveImpersonatingId}
         theme={theme}
         toggleTheme={toggleTheme}
         isAgency={homeData?.careType?.includes('Agency')}

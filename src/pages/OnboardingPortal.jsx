@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { db, auth } from '../firebase';
+import { db, auth, functions } from '../firebase';
 import { serverTimestamp, doc, setDoc, getDoc } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
+import { mapAuthError } from '../utils/authErrors';
 import { onAuthStateChanged } from 'firebase/auth';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Shield, Building2, FileText, Users, ArrowRight, Loader2, DollarSign, Palette, CheckCircle2 } from 'lucide-react';
@@ -218,60 +220,27 @@ export default function OnboardingPortal() {
     if (!auth.currentUser) return;
     setLoading(true);
     try {
-      const trialEndsAt = new Date();
-      trialEndsAt.setDate(trialEndsAt.getDate() + 14);
-
-      // 1. Create Business Doc (if new)
-      let currentBusinessId = '';
-      if (mode === 'new') {
-        const businessId = `biz_${Math.random().toString(36).substr(2, 9)}`;
-        await setDoc(doc(db, 'businesses', businessId), {
-          ownerUid: auth.currentUser.uid,
-          businessName,
-          businessEmail: businessEmail || auth.currentUser?.email || 'test@example.com',
-          businessPhone,
-          careType,
-          createdAt: serverTimestamp()
-        });
-        currentBusinessId = businessId;
-      } else {
-        // Find existing businessId
-        const uSnap = await getDoc(doc(db, 'users', auth.currentUser.uid));
-        currentBusinessId = uSnap.data()?.businessId;
-      }
-
-      // 2. Create Home Doc
-      const homeId = `home_${Math.random().toString(36).substr(2, 9)}`;
-      await setDoc(doc(db, 'homes', homeId), {
-        ownerId: auth.currentUser.uid,
-        businessId: currentBusinessId,
+      const completeOnboarding = httpsCallable(functions, 'completeProviderOnboarding');
+      await completeOnboarding({
+        mode,
+        businessName,
+        businessEmail: businessEmail || auth.currentUser?.email || '',
+        businessPhone,
+        careType,
         homeName: homeName || businessName,
         address,
         state: localStorage.getItem('provider_state') || 'us',
         licenseNumber,
-        careType,
-        homePhoto,
-        capacity: careType === 'In-Home Care Agency' || businessStatus === 'Aspiring' ? 0 : capacity,
-        staffCount: careType === 'In-Home Care Agency' && businessStatus !== 'Aspiring' ? staffCount : 0,
-        subscriptionStatus: businessStatus === 'Aspiring' ? 'incubation' : 'trial',
+        capacity,
+        staffCount,
         businessStatus,
-        trialEndsAt: trialEndsAt.toISOString(),
-        createdAt: serverTimestamp(),
-        refId: searchParams.get('ref') || null
+        homePhoto,
+        refId: searchParams.get('ref') || null,
       });
-
-      // 3. Update User Doc
-      await setDoc(doc(db, 'users', auth.currentUser.uid), {
-        role: 'provider',
-        businessId: currentBusinessId,
-        activeHomeId: homeId,
-        isAdmin: true
-      }, { merge: true });
-      
       navigate('/dashboard');
     } catch (err) {
-      console.error(err);
-      setErrorText(err.message || 'An error occurred during setup.');
+      console.error('[ONBOARDING] error:', err.code, err.message);
+      setErrorText(err.message || mapAuthError(err));
       setLoading(false);
     }
   };
@@ -294,15 +263,14 @@ export default function OnboardingPortal() {
         createdAt: serverTimestamp(),
       }, { merge: true });
 
-      // 2. Also ensure user doc is updated
+      // 2. Also ensure user doc is updated (no isAdmin — reseller admin via resellers/{uid}.ownerId)
       await setDoc(doc(db, 'users', auth.currentUser.uid), {
-        role: 'reseller',
-        isAdmin: true
+        role: 'reseller'
       }, { merge: true });
 
       navigate('/reseller-portal');
     } catch (err) {
-      console.error(err);
+      console.error('[ONBOARDING] reseller error:', err.code, err.message);
       setErrorText(err.message || 'An error occurred during finalization.');
       setLoading(false);
     }

@@ -87,12 +87,19 @@ service cloud.firestore {
 
     match /users/{userId} {
       allow read: if isSignedIn() && (request.auth.uid == userId || isSuperAdmin());
-      // Super-admins can write anything; regular users can write their own doc but cannot self-escalate privilege fields
-      allow write: if isSuperAdmin() ||
+      // On create: regular users may create their own doc but cannot self-grant privilege fields.
+      allow create: if isSuperAdmin() ||
+        (isSignedIn() && request.auth.uid == userId
+          && request.resource.data.get('isAdmin', false) != true
+          && request.resource.data.get('isSuperAdmin', false) != true
+          && request.resource.data.get('role', '') != 'admin');
+      // On update: regular users may update their own doc but cannot self-escalate from a non-privileged state.
+      allow update: if isSuperAdmin() ||
         (isSignedIn() && request.auth.uid == userId
           && !(request.resource.data.get('isAdmin', false) == true && resource.data.get('isAdmin', false) != true)
           && !(request.resource.data.get('isSuperAdmin', false) == true && resource.data.get('isSuperAdmin', false) != true)
           && !(request.resource.data.get('role', '') == 'admin' && resource.data.get('role', '') != 'admin'));
+      allow delete: if isSuperAdmin();
     }
 
     match /residents/{document=**} {
@@ -159,6 +166,12 @@ service cloud.firestore {
     match /family_invites/{inviteId} {
       allow read: if isSignedIn() && resource.data.email == request.auth.token.email;
       allow create, update, delete: if false;
+    }
+
+    match /impersonation_events/{eventId} {
+      allow read: if isSuperAdmin();
+      allow create: if isSuperAdmin() && request.resource.data.actorUid == request.auth.uid;
+      allow update, delete: if false;
     }
 
     match /{document=**} {

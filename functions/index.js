@@ -118,6 +118,105 @@ async function assertHomeAdmin(auth, homeId) {
 exports.clinicalAgent = require('./clinical_agent').clinicalAgent;
 
 // ---------------------------------------------------------
+// PROVIDER ONBOARDING (validates input + creates docs server-side)
+// ---------------------------------------------------------
+exports.completeProviderOnboarding = onCall(async (request) => {
+  const { auth, data } = request;
+  if (!auth) throw new HttpsError('unauthenticated', 'Login required.');
+
+  const {
+    mode,
+    businessName,
+    businessEmail,
+    businessPhone,
+    careType,
+    homeName,
+    address,
+    state,
+    licenseNumber,
+    capacity,
+    staffCount,
+    businessStatus,
+    homePhoto,
+    refId,
+  } = data || {};
+
+  if (mode !== 'new' && mode !== 'join') {
+    throw new HttpsError('invalid-argument', 'mode must be "new" or "join".');
+  }
+  if (mode === 'new' && (typeof businessName !== 'string' || businessName.trim().length < 2)) {
+    throw new HttpsError('invalid-argument', 'businessName required for new business.');
+  }
+  if (typeof careType !== 'string' || careType.trim().length === 0) {
+    throw new HttpsError('invalid-argument', 'careType required.');
+  }
+  if (typeof address !== 'string' || address.trim().length < 5) {
+    throw new HttpsError('invalid-argument', 'address required.');
+  }
+  if (typeof licenseNumber !== 'string' || licenseNumber.trim().length === 0) {
+    throw new HttpsError('invalid-argument', 'licenseNumber required.');
+  }
+  const safeCapacity = Number.isFinite(Number(capacity)) ? Math.max(0, Math.floor(Number(capacity))) : 0;
+  const safeStaffCount = Number.isFinite(Number(staffCount)) ? Math.max(0, Math.floor(Number(staffCount))) : 0;
+  const safeState = typeof state === 'string' && /^[a-z]{2}$/i.test(state) ? state.toLowerCase() : 'us';
+  const safeStatus = businessStatus === 'Aspiring' ? 'Aspiring' : 'Operating';
+
+  const trialEndsAt = new Date();
+  trialEndsAt.setDate(trialEndsAt.getDate() + 14);
+
+  const userRef = db.collection('users').doc(auth.uid);
+  const userSnap = await userRef.get();
+
+  let businessId;
+  if (mode === 'new') {
+    businessId = `biz_${Math.random().toString(36).slice(2, 11)}`;
+    await db.collection('businesses').doc(businessId).set({
+      ownerUid: auth.uid,
+      businessName: businessName.trim(),
+      businessEmail: (businessEmail || auth.token?.email || '').trim() || null,
+      businessPhone: (businessPhone || '').trim() || null,
+      careType: careType.trim(),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } else {
+    businessId = userSnap.exists ? userSnap.data().businessId : null;
+    if (!businessId) {
+      throw new HttpsError('failed-precondition', 'No existing business found for this user.');
+    }
+  }
+
+  const homeId = `home_${Math.random().toString(36).slice(2, 11)}`;
+  const isAgency = careType.includes('Agency');
+  await db.collection('homes').doc(homeId).set({
+    ownerId: auth.uid,
+    businessId,
+    homeName: (homeName || businessName || '').trim(),
+    address: address.trim(),
+    state: safeState,
+    licenseNumber: licenseNumber.trim(),
+    careType: careType.trim(),
+    homePhoto: typeof homePhoto === 'string' ? homePhoto : null,
+    capacity: isAgency || safeStatus === 'Aspiring' ? 0 : safeCapacity,
+    staffCount: isAgency && safeStatus !== 'Aspiring' ? safeStaffCount : 0,
+    subscriptionStatus: safeStatus === 'Aspiring' ? 'incubation' : 'trial',
+    businessStatus: safeStatus,
+    trialEndsAt: trialEndsAt.toISOString(),
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    refId: typeof refId === 'string' ? refId : null,
+  });
+
+  await userRef.set({
+    role: 'provider',
+    businessId,
+    activeHomeId: homeId,
+    isAdmin: true,
+  }, { merge: true });
+
+  console.log(`completeProviderOnboarding: created home ${homeId} for uid=${auth.uid}`);
+  return { homeId, businessId };
+});
+
+// ---------------------------------------------------------
 // 1. STRIPE CHECKOUT (AFH Onboarding)
 // ---------------------------------------------------------
 exports.createCheckoutSession = onCall(async (request) => {
@@ -246,7 +345,7 @@ exports.stripeWebhook = onRequest(async (req, res) => {
         careType: careType || 'Assisted Living Home < 10 Beds',
         stripeSubscriptionId: session.subscription,
         stripeCustomerId: session.customer,
-        wacStatus: 'Verified',
+        complianceStatus: 'Verified',
         refId: refId || null,
         referredBy: refId || null,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),

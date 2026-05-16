@@ -7,6 +7,7 @@ import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, RecaptchaVerifier, signInWithPhoneNumber } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
 import { enableLocalDemo } from '../data/localDemo';
+import { mapAuthError } from '../utils/authErrors';
 import { providerHasHome } from '../data/homeAccess';
 
 const STAFF_PORTAL_ROLES = ['caregiver', 'med-tech', 'rn-delegator'];
@@ -310,7 +311,7 @@ export default function AuthSite() {
       setNeedsOnboarding(true);
     } catch (err) {
       console.error('[AUTH] ERROR:', err.code, err.message);
-      setErrorText(`Sign-in error: ${err.code || 'unknown'} - ${err.message}`);
+      setErrorText(mapAuthError(err));
     } finally {
       isSigningInRef.current = false;
       setLoading(false);
@@ -397,15 +398,14 @@ export default function AuthSite() {
         }, { merge: true });
 
         await setDoc(doc(db, 'users', uid), {
-          role: 'reseller',
-          isAdmin: true
+          role: 'reseller'
         }, { merge: true });
 
         navigate('/reseller-portal');
       }
     } catch (err) {
-      console.error(err);
-      setErrorText(err.message);
+      console.error('[AUTH] Reseller signup error:', err.code, err.message);
+      setErrorText(mapAuthError(err));
     } finally {
       setLoading(false);
     }

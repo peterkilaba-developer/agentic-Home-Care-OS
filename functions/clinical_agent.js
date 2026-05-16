@@ -1,4 +1,6 @@
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
+const { buildStateSystemPrompt } = require('./state_compliance');
+const { buildSchemaPromptBlock } = require('./clinical_schema');
 
 // ---------------------------------------------------------
 // CLINICAL GUARDRAILS (Deterministic Layer)
@@ -76,7 +78,7 @@ class ClinicalGuardrails {
 // ---------------------------------------------------------
 // POLY-MODEL ROUTER
 // ---------------------------------------------------------
-async function callGemini(messages, maxTokens = 8192, temperature = 0.05, document = null, model = 'gemini-1.5-flash') {
+async function callGemini(messages, maxTokens = 8192, temperature = 0.05, document = null, model = 'gemini-2.5-flash') {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return { error: 'GEMINI_API_KEY not set' };
 
@@ -105,7 +107,7 @@ async function callGemini(messages, maxTokens = 8192, temperature = 0.05, docume
   }
 
   try {
-    const url = `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent?key=${apiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -115,9 +117,15 @@ async function callGemini(messages, maxTokens = 8192, temperature = 0.05, docume
     if (!response.ok) return { error: `Gemini API Error: ${await response.text()}` };
     const data = await response.json();
     const candidate = data.candidates?.[0];
-    if (!candidate) return { error: 'Gemini Error: No candidates returned.' };
-    
-    return { choices: [{ message: { role: 'assistant', content: candidate.content?.parts?.[0]?.text || '' } }], model };
+    if (!candidate) return { error: 'Gemini Error: No candidates returned.', promptFeedback: data.promptFeedback };
+
+    const text = candidate.content?.parts?.[0]?.text || '';
+    const finishReason = candidate.finishReason;
+    return {
+      choices: [{ message: { role: 'assistant', content: text }, finishReason }],
+      model,
+      usage: data.usageMetadata
+    };
   } catch (err) { return { error: err.message }; }
 }
 
@@ -136,13 +144,49 @@ async function callOpenAI(messages, maxTokens = 1024, temperature = 0.05) {
 }
 
 // ---------------------------------------------------------
+// FIT DETERMINATION NORMALIZER
+// Catches AI inconsistency (e.g., feasible=true but reasoning says "unfit")
+// and forces internal consistency before returning to the client.
+// ---------------------------------------------------------
+function normalizeFitDetermination(extracted) {
+  if (!extracted || !extracted.fitDetermination) return extracted;
+  const fit = extracted.fitDetermination;
+  const rec = (fit.recommendation || '').toLowerCase();
+  const reasoning = (fit.reasoning || '').toLowerCase();
+  const risks = Array.isArray(fit.risks) ? fit.risks : [];
+
+  const reasoningHasDecline = /\b(unfit|not appropriate|decline|cannot be met|exceed|too complex|inappropriate)\b/i.test(reasoning);
+  const recDeclines = rec.includes('decline') || rec.includes('not appropriate') || rec.includes('unfit');
+  const recAccepts = rec === 'accept' || rec.startsWith('accept') && !rec.includes('condition');
+
+  if (reasoningHasDecline && !recDeclines) {
+    fit.recommendation = 'Decline';
+    fit.feasible = false;
+    fit._normalized = 'reasoning_indicated_decline';
+  } else if (typeof fit.feasible === 'boolean' && !fit.feasible && !recDeclines) {
+    fit.recommendation = 'Decline';
+    fit._normalized = 'feasible_false_forced_decline';
+  } else if (risks.length >= 3 && recAccepts) {
+    fit.recommendation = 'Accept with Conditions';
+    fit._normalized = 'risks_forced_conditions';
+  }
+
+  if (recDeclines && fit.feasible === true) {
+    fit.feasible = false;
+    fit._normalized = (fit._normalized || '') + ' decline_forced_infeasible';
+  }
+  return extracted;
+}
+
+// ---------------------------------------------------------
 // EXPORTED CLOUD FUNCTION
 // ---------------------------------------------------------
 exports.clinicalAgent = onCall(async (request) => {
   const { auth, data } = request;
   if (!auth) throw new HttpsError('unauthenticated', 'Login required.');
 
-  const { intent, messages, maxTokens, temperature, document, stateName } = data;
+  const { intent, messages, maxTokens, temperature, document, stateName, stateCompliance, homeContext } = data;
+  const stateBlock = buildStateSystemPrompt(stateCompliance);
   if (!messages || !Array.isArray(messages)) throw new HttpsError('invalid-argument', 'Messages array required.');
 
   // Input Guards
@@ -153,30 +197,66 @@ exports.clinicalAgent = onCall(async (request) => {
   if (intent === 'intake') {
     if (!messages || !Array.isArray(messages)) throw new HttpsError('invalid-argument', 'Messages array required.');
     // Specialized Intake Logic with State Template Mirroring
-    const intakeSystemPrompt = `You are an Enterprise Clinical Intake Auditor. 
-    1. EXHAUSTIVE EXTRACTION: Extract EVERY clinical detail, including identity, medications, ADLs, and history.
-    2. STATE COMPLIANCE: The extraction MUST fully mirror the clinical sections of the state-specific intake template for: ${stateName || 'National'}.
-    3. FIT DETERMINATION: Perform a professional analysis. Determine if this client is a good fit for a standard ${stateName || ''} facility based on their clinical complexity.
-    4. RESPOND IN JSON: Respond ONLY with a JSON object.`;
+    const intakeSystemPrompt = `${stateBlock}
+
+You are an Enterprise Clinical Intake Auditor analyzing the attached clinical packet for admission to an assisted-living facility.
+
+EXTRACTION RULES:
+1. EXHAUSTIVE EXTRACTION: Extract EVERY clinical detail from the packet — identity, full medication list with dose/frequency/route, all diagnoses (primary, secondary, chronic conditions, ICD-10 codes when present), allergies (drug/food/environmental), ALL eight ADLs with assistance level, all six IADLs, cognitive status and behaviors, safety/fall history, dietary needs, code status and advance directives, insurance, primary physician, emergency contact, and power of attorney.
+2. STRICT SCHEMA: Match the schema below exactly. Every field is required. When a value is genuinely absent from the source document, return empty string / empty array / false / null — never omit the key.
+3. NO INVENTION: Do not fabricate data. If the document does not state a value, leave it empty. Do invert obvious negatives (e.g., "no known allergies" → empty arrays).
+4. ADL LEVELS: Use only one of: "Independent", "Supervision", "Assist", "Total Care" (or for continence: "Continent", "Occasional", "Incontinent"; for mobility: "Independent", "Cane", "Walker", "Wheelchair", "Bedbound").
+5. STATE COMPLIANCE: The extraction must mirror the clinical sections required by the state regulations cited above.
+6. FIT DETERMINATION — INTERNAL CONSISTENCY REQUIRED:
+   - "feasible" (boolean): true ONLY if the resident's clinical needs can plausibly be met in the ${stateCompliance?.shortFacilityType || 'facility'} type cited above.
+   - "recommendation" (one of "Accept" | "Accept with Conditions" | "Decline"): MUST be consistent with feasible. If feasible=false, recommendation MUST be "Decline". If feasible=true with significant risks (falls, behaviors, wandering, complex meds), recommendation MUST be "Accept with Conditions". Only use "Accept" when feasible=true AND risks are routine.
+   - "reasoning" (string): MUST narratively justify the chosen recommendation. Do not write reasoning that contradicts the recommendation.
+   - "risks" (array): list every clinically significant risk you identified from the document. Be exhaustive — falls, wandering, aggression, complex meds, infection control, behavioral, dietary, swallowing, etc.
+
+${buildSchemaPromptBlock()}
+
+RESPOND WITH ONLY THE JSON OBJECT. No preamble, no markdown fences, no trailing text.`;
     
     const intakeMessages = [{ role: 'system', content: intakeSystemPrompt }, ...messages.filter(m => m.role === 'user')];
-    result = await callGemini(intakeMessages, maxTokens, temperature, document);
+    result = await callGemini(intakeMessages, maxTokens || 16384, 0, document, 'gemini-2.5-pro');
   } else if (intent === 'generate_care_plan') {
     const { residentData } = data;
-    const carePlanPrompt = `Generate a COMPREHENSIVE, NEGOTIATED CARE PLAN for the following resident in ${stateName || 'Washington'}.
-    Resident Info: ${JSON.stringify(residentData)}
-    
-    The care plan must include:
-    1. Clinical Overview & Diagnosis
-    2. ADL Support Plan (Dressing, Bathing, etc.)
-    3. Medication Management Strategy
-    4. Behavioral Interventions (if applicable)
-    5. Fall Prevention & Safety Protocols
-    
-    Format the response as a professional, narrative-style care plan suitable for state audit.`;
+    const homeBlock = homeContext
+      ? `FACILITY CONTEXT:
+- Home/Agency: ${homeContext.homeName || 'Unspecified'}
+- Total beds: ${homeContext.capacity || 'Unspecified'}, currently occupied: ${homeContext.occupied || 0}
+- Licensed capabilities: ${(homeContext.capabilities || []).join(', ') || 'None declared'}
+- Capability gaps for this resident: ${(homeContext.gaps || []).join(', ') || 'None'}
+- License #: ${homeContext.licenseNumber || 'N/A'}
+The care plan must explicitly state how each capability gap (if any) will be mitigated (RN delegation, contract services, outside agency, decline).`
+      : 'FACILITY CONTEXT: not provided — write a generic facility-agnostic plan.';
+
+    const carePlanPrompt = `${stateBlock}
+
+${homeBlock}
+
+Generate a COMPREHENSIVE, NEGOTIATED CARE PLAN for the following resident.
+RESIDENT DATA (extracted from intake packet):
+${JSON.stringify(residentData, null, 2)}
+
+The care plan must include each of these sections, in order, each as its own heading:
+1. RESIDENT PROFILE — full identity, DOB, room (if assigned), primary language, code status.
+2. CLINICAL OVERVIEW — primary and secondary diagnoses, chronic conditions, ICD-10 codes if present.
+3. MEDICATION MANAGEMENT — full med list with dose/frequency/route/indication, who administers (delegated nurse vs. self-admin), MAR cadence.
+4. ADL SUPPORT PLAN — line-by-line plan for bathing, dressing, grooming, toileting, transferring, eating, continence, mobility, citing the assistance level extracted.
+5. IADL SUPPORT — medication assistance, finance, transport, housekeeping, meal prep, phone.
+6. COGNITIVE & BEHAVIORAL PLAN — cognitive status, documented behaviors, triggers, intervention strategies (redirection, reassurance, etc.).
+7. SAFETY & FALL PREVENTION — fall risk level, history, specific interventions (bed alarm, gait belt, etc.), wandering/elopement controls if applicable.
+8. DIETARY & SWALLOWING — diet texture, restrictions, swallowing precautions, fluid restriction.
+9. ADVANCE DIRECTIVES & END-OF-LIFE — code status, POLST, healthcare proxy, hospice coordination if applicable.
+10. CAPABILITY GAP MITIGATION — for each licensed-capability gap above, state the mitigation (or recommend decline).
+11. STATE COMPLIANCE STATEMENT — explicitly cite the governing law, regulator, and facility type from the state compliance block above, and state that the plan meets those requirements.
+12. SIGNATURES — placeholder lines for resident/representative and administrator with date fields.
+
+Format as a professional, narrative-style care plan suitable for state audit. Use plain text, not markdown.`;
     
     const cpMessages = [{ role: 'user', content: carePlanPrompt }];
-    result = await callGemini(cpMessages, 2048, 0.1, null, 'gemini-1.5-pro');
+    result = await callGemini(cpMessages, 4096, 0.1, null, 'gemini-2.5-pro');
   } else {
     if (!messages || !Array.isArray(messages)) throw new HttpsError('invalid-argument', 'Messages array required.');
     result = await callOpenAI(messages, maxTokens, temperature);
@@ -186,12 +266,35 @@ exports.clinicalAgent = onCall(async (request) => {
 
   // Post-Processing for Intake
   if (intent === 'intake' && result.choices) {
+    const raw = result.choices[0].message.content || '';
+    const finishReason = result.choices[0].finishReason;
+    const usage = result.usage;
+    console.log(`[intake] finishReason=${finishReason} rawLen=${raw.length} usage=${JSON.stringify(usage)}`);
+
+    if (!raw.trim()) {
+      result.error = `Gemini returned no content. finishReason=${finishReason || 'unknown'}. Check safety filters or input.`;
+      return result;
+    }
+    if (finishReason && finishReason !== 'STOP') {
+      // MAX_TOKENS, SAFETY, RECITATION etc. — JSON likely truncated.
+      console.warn(`[intake] non-STOP finishReason=${finishReason} — extraction may be incomplete`);
+    }
+
     try {
-      const raw = result.choices[0].message.content;
-      const clean = raw.replace(/```json/g, '').replace(/```/g, '').trim();
+      const clean = raw.replace(/```json/gi, '').replace(/```/g, '').trim();
       const match = clean.match(/\{[\s\S]*\}/);
-      result.extracted = JSON.parse(match ? match[0] : clean);
-    } catch (e) { result.error = "Data Parsing Failed."; }
+      const jsonStr = match ? match[0] : clean;
+      const parsed = JSON.parse(jsonStr);
+      result.extracted = normalizeFitDetermination(parsed);
+      result.finishReason = finishReason;
+    } catch (e) {
+      // Surface the actual parse failure with a snippet so the client can react.
+      const snippet = raw.slice(0, 500);
+      console.error(`[intake] JSON parse failed: ${e.message}. Snippet: ${snippet}`);
+      result.error = `Extraction parse failed: ${e.message}. finishReason=${finishReason || 'unknown'}.`;
+      result.rawSnippet = snippet;
+      result.finishReason = finishReason;
+    }
   }
 
   return result;

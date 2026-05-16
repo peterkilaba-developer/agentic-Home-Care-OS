@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0.0] - 2026-05-15
+
+### Added — Intake Pipeline (state-aware + capability-matched)
+- 14-section strict-JSON clinical extraction schema (identity, diagnoses w/ ICD-10, full med table, allergies, 8 ADLs + 6 IADLs, cognitive, safety, dietary, advance directives, insurance, three contact roles, narrative, fit determination)
+- State-aware compliance: per-state regulator/law/facility-type injected into both intake + care-plan prompts, validated on care-plan output (regulator, law, facility type, state name must all be cited)
+- Facility Match panel: derives required capabilities from extraction (diabetic, dementia, wound, hospice, incontinence, behavioral, ADL, med-admin) and compares against `homeData.capabilities` + bed capacity
+- Care plan generation accepts `homeContext` (gaps, capacity) and explicitly addresses each gap with mitigation strategies
+- AI fit determination consistency: backend normalizer forces `recommendation`/`feasible`/`reasoning` agreement; UI banner surfaces AI-vs-RCFEM conflicts at admission decision
+- Switched to `gemini-2.5-pro` on v1beta endpoint (1.5 family retired off v1); bumped intake maxTokens to 16384
+
+### Added — Security
+- Auth error mapper sanitizes Firebase error codes (no more `auth/user-not-found` vs `auth/wrong-password` enumeration)
+- Impersonation audit: `impersonation_events` collection with super-admin-only rules; client-side guard prevents non-admins from honoring `?impersonate=`
+- Server-side provider onboarding (`completeProviderOnboarding` Cloud Function): validates input, creates business+home+user docs atomically via Admin SDK
+- Reseller signup no longer self-grants `isAdmin: true` (admin status via `resellers/{uid}.ownerId`)
+
+### Fixed
+- Firestore rule regression: `users/{uid}` write rule referenced `resource.data` which is null on create — split into `create`/`update`/`delete` so first-time sign-in works
+- WAC webhook field mismatch: `wacStatus` → `complianceStatus` (matches Firestore rule check)
+- Intake extraction silent failure: backend now logs `finishReason`/usage and returns specific errors (parse failed, empty content, truncated); frontend shows persistent error banner with retry
+- AI Fit Analysis card no longer hardcoded green "Accept" — now reflects actual recommendation in matching colors with feasibility flag and risk list
+
+### Tests
+- 60 tests passing (up from 9): RCFEM scoring, state compliance (5 sample states + 50-state drift check), clinical schema + capability matching, fit-determination normalizer, auth error sanitization
+
 ## [0.1.0.0] - 2026-05-15
 
 ### Added
