@@ -89,6 +89,7 @@ function IncidentForm({ homeData, residents, onClose, createSystemLog }) {
     if (!form.incidentType) { setError('Please select an incident type.'); return; }
     if (!form.severity) { setError('Please select a severity level.'); return; }
     if (!form.incidentDate) { setError('Please enter the incident date.'); return; }
+    if (!form.incidentTime) { setError('Please enter the time the incident occurred.'); return; }
     if (!form.description.trim()) { setError('Please describe what happened.'); return; }
     if (!form.reportedBy.trim()) { setError('Please enter the name of the person reporting.'); return; }
 
@@ -179,7 +180,7 @@ function IncidentForm({ homeData, residents, onClose, createSystemLog }) {
                   className="w-full bg-surface border border-border rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40">
                   <option value="">Not resident-specific / Unknown</option>
                   {activeResidents.map(r => (
-                    <option key={r.id} value={r.id}>{r.name || r.identity?.name}</option>
+                    <option key={r.id} value={r.id}>{r.name || r.identity?.name || '(Unnamed Resident)'}</option>
                   ))}
                 </select>
               </div>

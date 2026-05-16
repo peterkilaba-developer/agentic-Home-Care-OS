@@ -180,7 +180,9 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
-    // Incident reports: home staff can create and read; only super-admin can delete (immutable audit record).
+    // Incident reports: home staff create and read; home managers update (follow-up documentation
+    // is a legitimate need in healthcare — e.g., adding treatment notes after initial report);
+    // only super-admin can delete to preserve the immutable audit chain.
     match /incidents/{incidentId} {
       allow read: if canReadHomeResource(resource.data);
       allow create: if canCreateHomeResource(request.resource.data);
