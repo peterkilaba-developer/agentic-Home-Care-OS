@@ -1391,20 +1391,20 @@ Administrator: ____________________ Date: __________`;
       )}
 
       {showDeclineForm && (
-        <div className="fixed inset-0 z-[10000] bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-8">
-          <div className="bg-white max-w-2xl w-full rounded-3xl shadow-2xl border-2 border-rose-300 overflow-hidden">
-            <header className="px-8 py-6 bg-rose-50 border-b border-rose-200 flex items-start justify-between gap-4">
+        <div className="fixed inset-0 z-[10000] bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-4 sm:p-8">
+          <div className="bg-white max-w-2xl w-full rounded-3xl shadow-2xl border-2 border-rose-300 overflow-hidden flex flex-col max-h-[90vh]">
+            <header className="px-8 py-6 bg-rose-50 border-b border-rose-200 flex items-start justify-between gap-4 flex-shrink-0">
               <div>
                 <h3 className="text-2xl font-black text-rose-800 flex items-center gap-2">
                   <AlertTriangle className="w-7 h-7" /> Decline Admission
                 </h3>
                 <p className="text-sm text-rose-700 mt-1">Document the reason this resident cannot be admitted. This will be saved to the audit log and the lead removed from the active pipeline.</p>
               </div>
-              <button onClick={() => { setShowDeclineForm(false); setDeclineReason(''); }} className="text-rose-700 hover:bg-rose-100 rounded-full p-2">
+              <button onClick={() => { setShowDeclineForm(false); setDeclineReason(''); }} className="text-rose-700 hover:bg-rose-100 rounded-full p-2 flex-shrink-0">
                 <X className="w-5 h-5" />
               </button>
             </header>
-            <div className="p-8 space-y-5">
+            <div className="p-8 space-y-5 overflow-y-auto flex-1">
               <div>
                 <p className="text-[10px] font-bold uppercase text-muted">Resident</p>
                 <p className="text-lg font-bold text-slate-800">{_leadForm.identity?.name || _leadForm.name || 'Unnamed'}</p>
@@ -1412,7 +1412,7 @@ Administrator: ____________________ Date: __________`;
               {_leadForm.fitDetermination?.reasoning && (
                 <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
                   <p className="text-[10px] font-bold uppercase text-muted mb-1">AI Reasoning (snapshot)</p>
-                  <p className="text-xs text-slate-700 whitespace-pre-wrap">{_leadForm.fitDetermination.reasoning}</p>
+                  <p className="text-xs text-slate-700 whitespace-pre-wrap leading-relaxed">{_leadForm.fitDetermination.reasoning}</p>
                 </div>
               )}
               {Array.isArray(_leadForm.fitDetermination?.risks) && _leadForm.fitDetermination.risks.length > 0 && (
@@ -1433,7 +1433,7 @@ Administrator: ____________________ Date: __________`;
                   value={declineReason}
                   onChange={e => setDeclineReason(e.target.value)}
                   placeholder="e.g. Resident requires SNF level of care; bedfast with 2-person Hoyer transfers exceeds AFH licensed scope per Iowa Chapter 69."
-                  className="w-full mt-2 p-3 bg-white border-2 border-slate-300 rounded-xl text-sm min-h-[120px] outline-none focus:border-rose-400"
+                  className="w-full mt-2 p-3 bg-white border-2 border-slate-300 rounded-xl text-sm min-h-[200px] outline-none focus:border-rose-400 resize-y"
                 />
                 <p className="text-[10px] text-muted mt-1">{declineReason.length} characters</p>
               </div>
@@ -1441,7 +1441,7 @@ Administrator: ____________________ Date: __________`;
                 <div className="p-3 bg-rose-50 border border-rose-300 rounded-lg text-xs text-rose-700">{error}</div>
               )}
             </div>
-            <footer className="px-8 py-5 bg-slate-50 border-t flex items-center justify-end gap-3">
+            <footer className="px-8 py-5 bg-slate-50 border-t flex items-center justify-end gap-3 flex-shrink-0">
               <button onClick={() => { setShowDeclineForm(false); setDeclineReason(''); setError(null); }} className="px-6 py-3 border rounded-2xl font-bold hover:bg-white">Cancel</button>
               <button
                 onClick={handleDeclineAdmission}
@@ -1456,20 +1456,20 @@ Administrator: ____________________ Date: __________`;
       )}
 
       {referralTarget && (
-        <div className="fixed inset-0 z-[10000] bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-8">
-          <div className="bg-white max-w-3xl w-full rounded-3xl shadow-2xl overflow-hidden">
-            <header className="px-8 py-6 bg-indigo-50 border-b border-indigo-200 flex items-start justify-between gap-4">
+        <div className="fixed inset-0 z-[10000] bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-4 sm:p-8">
+          <div className="bg-white max-w-3xl w-full rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            <header className="px-8 py-6 bg-indigo-50 border-b border-indigo-200 flex items-start justify-between gap-4 flex-shrink-0">
               <div>
                 <h3 className="text-2xl font-black text-indigo-800 flex items-center gap-2">
                   <Hospital className="w-7 h-7" /> Refer to Nursing Facility
                 </h3>
                 <p className="text-sm text-indigo-700 mt-1">Generate a referral packet for {referralTarget.identity?.name || referralTarget.name || 'this resident'} and forward to a higher-acuity facility.</p>
               </div>
-              <button onClick={() => { setReferralTarget(null); setReferralFacility({ name: '', email: '', phone: '', notes: '' }); }} className="text-indigo-700 hover:bg-indigo-100 rounded-full p-2">
+              <button onClick={() => { setReferralTarget(null); setReferralFacility({ name: '', email: '', phone: '', notes: '' }); }} className="text-indigo-700 hover:bg-indigo-100 rounded-full p-2 flex-shrink-0">
                 <X className="w-5 h-5" />
               </button>
             </header>
-            <div className="p-8 grid grid-cols-2 gap-4">
+            <div className="p-8 grid grid-cols-2 gap-4 overflow-y-auto flex-1">
               <div>
                 <label className="text-[10px] font-bold uppercase text-muted">Receiving Facility Name *</label>
                 <input
@@ -1510,8 +1510,8 @@ Administrator: ____________________ Date: __________`;
                 />
               </div>
               <div className="col-span-2 p-4 bg-slate-50 border border-slate-200 rounded-xl">
-                <p className="text-[10px] font-bold uppercase text-muted mb-2">Referral Packet Preview</p>
-                <pre className="text-[11px] text-slate-700 whitespace-pre-wrap font-sans max-h-64 overflow-y-auto">{buildReferralSummary(referralTarget, referralFacility)}</pre>
+                <p className="text-[10px] font-bold uppercase text-muted mb-2">Referral Packet Preview (full document)</p>
+                <pre className="text-[11px] text-slate-700 whitespace-pre-wrap font-sans leading-relaxed">{buildReferralSummary(referralTarget, referralFacility)}</pre>
               </div>
               {error && (
                 <div className="col-span-2 p-3 bg-rose-50 border border-rose-300 rounded-lg text-xs text-rose-700">{error}</div>
