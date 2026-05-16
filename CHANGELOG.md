@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0.0] - 2026-05-15
+
+### Added — Resident Discharge / End-of-Care Workflow
+- Discharge Resident modal on every active resident card in the Roster view
+- 7 discharge types: Returned Home / Family, Hospitalized, Transferred to SNF, Transferred to another ALF/AFH, Against Medical Advice (AMA), Deceased, Other
+- Required date picker (capped at today) and clinical discharge summary field; warning banner clarifies the action cannot be undone without re-admitting through the intake pipeline
+- Writes `status: 'discharged'`, `dischargeType`, `dischargeDate`, `dischargeReason`, `dischargedAt` (server timestamp) to resident doc
+- Creates a `RESIDENT_DISCHARGED` system log entry automatically
+- Discharged residents are hidden from the active roster by default; a "Show Discharged (N)" toggle reveals a muted historical section where clinical charts remain accessible as read-only records
+
+### Added — Incident / Accident Reporting
+- New Incidents module at `/dashboard/incidents` with full Firestore integration — state-mandated incident logging for all 50 states
+- 8 incident types: Fall / Near-Fall, Medication Error, Behavioral, Medical Emergency, Elopement / Wandering, Property Damage, Suspected Abuse / Neglect, Other
+- 4 severity levels with plain-language descriptions (Low through Critical)
+- Notification checklist: Family / Emergency Contact, Physician, DOH, Case Manager, EMS, Law Enforcement, Long-Term Care Ombudsman — with notes field for documentation of who was contacted and when
+- Summary stats: total incidents, this-month count, serious + critical count (highlighted in red when non-zero)
+- Filter tabs by incident type; expandable accordion cards showing full detail; browser print-to-PDF for physical record keeping
+- Incidents sidebar nav entry added between State Compliance and System Logs
+
+### Added — Firestore Security
+- `incidents` collection rules: home staff create + read; home managers update (for follow-up documentation); super-admin-only delete to preserve the immutable audit chain
+
+### Fixed — Security
+- `storage.rules` `isSuperAdmin()` was hardcoding two email strings (`admin@agentic.com`, `superadmin@homecare.com`) that could not be rotated without a rules redeploy. Now uses Firebase custom claims (`superAdmin: true`) with user-doc fallback (`isSuperAdmin == true && role == 'admin'`), matching `firestore.rules` exactly. Also aligned `canAccessHome()` to check `activeHomeId` alongside `homeId`.
+
+### Fixed — Incidents Form
+- `incidentTime` field was marked required (`*`) in the UI but not validated in `handleSubmit`; users could submit without entering a time, breaking audit trail completeness — validation now enforced
+- Resident selector in incident form shows `(Unnamed Resident)` fallback when both `r.name` and `r.identity?.name` are undefined
+
+### Tests
+- 138 tests passing (up from 60): all prior tests preserved; no regressions
+
 ## [0.2.0.0] - 2026-05-15
 
 ### Added — Intake Pipeline (state-aware + capability-matched)
