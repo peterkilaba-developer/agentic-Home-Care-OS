@@ -21,6 +21,7 @@ import SystemActivityLogsView from '../components/dashboard/Logs';
 import StateFormsView from '../components/dashboard/Forms';
 import HomeProfileView from '../components/dashboard/Settings';
 import { StaffHRView, TimeEVVView, BillingView, FamilyAccessView } from '../components/dashboard/Operations';
+import IncidentsView from '../components/dashboard/Incidents';
 import BusinessOverview from '../components/dashboard/BusinessOverview';
 import { isLocalDemoEnabled, DEMO_USER, readLocalDemoState, writeLocalDemoState } from '../data/localDemo';
 import { recordImpersonationEvent } from '../utils/impersonationAudit';
@@ -272,6 +273,7 @@ export default function Dashboard() {
               <Route path="evv" element={<TimeEVVView homeData={homeData} createSystemLog={createSystemLog} />} />
               <Route path="billing" element={<BillingView homeData={homeData} residents={residents} stateData={currentStateData} createSystemLog={createSystemLog} />} />
               <Route path="family" element={<FamilyAccessView homeData={homeData} residents={residents} />} />
+              <Route path="incidents" element={<IncidentsView homeData={homeData} residents={residents} createSystemLog={createSystemLog} />} />
               <Route path="settings" element={<HomeProfileView homeData={homeData} stateData={currentStateData} residents={residents} />} />
             </Routes>
           </AnimatePresence>

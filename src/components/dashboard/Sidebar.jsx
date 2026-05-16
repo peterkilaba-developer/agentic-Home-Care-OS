@@ -1,7 +1,7 @@
 import React from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Brain, Activity, Shield, Users, FileText, MessageSquare, Briefcase, Clock, DollarSign, Network, Sun, Moon, Monitor, LogOut, Settings, Plus, Users2 } from 'lucide-react';
+import { Brain, Activity, Shield, Users, FileText, MessageSquare, Briefcase, Clock, DollarSign, Network, Sun, Moon, Monitor, LogOut, Settings, Plus, Users2, AlertTriangle } from 'lucide-react';
 import { signOut } from 'firebase/auth';
 import { auth } from '../../firebase';
 
@@ -60,6 +60,7 @@ export default function Sidebar({ businessData, myHomes, selectedHomeId, setSele
               <NavButton to="/dashboard/compliance" icon={<Shield />} label="State Compliance" active={location.pathname.replace(/\/$/, '') === '/dashboard/compliance'} impersonatingId={impersonatingId} />
               <NavButton to="/dashboard/roster" icon={<Users />} label={isAgency ? "Client Roster" : "Resident Roster"} active={location.pathname.replace(/\/$/, '') === '/dashboard/roster'} impersonatingId={impersonatingId} />
               <NavButton to="/dashboard/intake" icon={<FileText />} label="Intake Pipeline" active={location.pathname.replace(/\/$/, '') === '/dashboard/intake'} impersonatingId={impersonatingId} />
+              <NavButton to="/dashboard/incidents" icon={<AlertTriangle />} label="Incidents" active={location.pathname.replace(/\/$/, '') === '/dashboard/incidents'} impersonatingId={impersonatingId} />
               <NavButton to="/dashboard/logs" icon={<MessageSquare />} label="System Logs" active={location.pathname.replace(/\/$/, '') === '/dashboard/logs'} impersonatingId={impersonatingId} />
               <NavButton to="/dashboard/forms" icon={<FileText />} label="State Forms" active={location.pathname.replace(/\/$/, '') === '/dashboard/forms'} impersonatingId={impersonatingId} />
             </nav>
