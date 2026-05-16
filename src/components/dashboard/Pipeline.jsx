@@ -275,16 +275,58 @@ function AIFitAnalysisCard({ lead }) {
 function FacilityMatchPanel({ lead, homeData, residents }) {
   const match = matchHomeToNeeds(homeData, lead, residents);
   const capacityColor = match.capacityOk ? 'emerald' : 'rose';
-  const allMet = match.gaps.length === 0;
+
+  let badgeLabel, badgeClass, borderClass, recoText;
+  if (match.aiDeclined) {
+    badgeLabel = 'AI DECLINED';
+    badgeClass = 'bg-rose-600 text-white';
+    borderClass = 'border-rose-400 bg-rose-50/40';
+    recoText = 'AI override: do not proceed';
+  } else if (match.acuityBlocking) {
+    badgeLabel = 'ACUITY MISMATCH';
+    badgeClass = 'bg-rose-600 text-white';
+    borderClass = 'border-rose-400 bg-rose-50/40';
+    recoText = 'Higher-acuity facility required';
+  } else if (match.gaps.length > 0 || !match.capacityOk) {
+    badgeLabel = 'REVIEW';
+    badgeClass = 'bg-amber-500 text-white';
+    borderClass = 'border-amber-300 bg-amber-50/30';
+    recoText = 'Mitigate gaps first';
+  } else {
+    badgeLabel = 'MATCH';
+    badgeClass = 'bg-emerald-500 text-white';
+    borderClass = 'border-emerald-300 bg-emerald-50/30';
+    recoText = 'Proceed to Care Plan';
+  }
 
   return (
-    <div className={`glass-card p-6 border-2 ${allMet && match.capacityOk ? 'border-emerald-300 bg-emerald-50/30' : 'border-amber-300 bg-amber-50/30'}`}>
+    <div className={`glass-card p-6 border-2 ${borderClass}`}>
       <div className="flex items-center justify-between mb-4">
         <h5 className="text-xs font-black uppercase tracking-widest text-slate-700">Facility Match — Needs vs. Capability & Capacity</h5>
-        <span className={`text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-tighter ${match.overallFit ? 'bg-emerald-500 text-white' : 'bg-amber-500 text-white'}`}>
-          {match.overallFit ? 'Match' : 'Review'}
-        </span>
+        <span className={`text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-tighter ${badgeClass}`}>{badgeLabel}</span>
       </div>
+
+      {match.aiDeclined && (
+        <div className="mb-4 p-3 bg-rose-100 border border-rose-300 rounded-lg">
+          <p className="text-[11px] font-bold text-rose-700">
+            AI clinical analysis returned <span className="uppercase">{match.aiRecommendation || 'Decline'}</span> — this resident's needs were judged infeasible regardless of which capability boxes are checked below. Admission requires explicit clinical override.
+          </p>
+        </div>
+      )}
+
+      {match.acuityGaps.length > 0 && (
+        <div className="mb-4">
+          <p className="text-[10px] font-bold text-rose-700 uppercase mb-2">Acuity Concerns ({match.acuityGaps.length})</p>
+          <ul className="space-y-1">
+            {match.acuityGaps.map((g, i) => (
+              <li key={i} className="flex items-start gap-2 text-[11px]">
+                <AlertTriangle className={`w-3 h-3 flex-shrink-0 mt-0.5 ${g.severity === 'block' ? 'text-rose-700' : 'text-amber-600'}`} />
+                <span className={`font-medium ${g.severity === 'block' ? 'text-rose-800' : 'text-amber-800'}`}>{g.label}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-4">
         <div>
@@ -331,11 +373,11 @@ function FacilityMatchPanel({ lead, homeData, residents }) {
         </div>
         <div>
           <p className="text-[9px] font-bold text-muted uppercase">Recommendation</p>
-          <p className="text-sm font-bold text-slate-800">{match.overallFit ? 'Proceed to Care Plan' : 'Mitigate Gaps First'}</p>
+          <p className={`text-sm font-bold ${match.overallFit ? 'text-emerald-700' : 'text-rose-700'}`}>{recoText}</p>
         </div>
       </div>
 
-      {match.gaps.length > 0 && (
+      {match.gaps.length > 0 && !match.aiDeclined && !match.acuityBlocking && (
         <p className="mt-3 text-[10px] text-amber-700 italic">
           Capability gaps must be mitigated via RN delegation, contract services, or external agency before admission. The generated care plan will explicitly address each gap.
         </p>
@@ -375,6 +417,9 @@ export default function IntakePipelineView({ pipeline, stateData, homeData, resi
   const [part2Observations, setPart2Observations] = useState({
     physical: '', cognitive: '', communication: '', social: '', environmental: ''
   });
+  const [declineReason, setDeclineReason] = useState('');
+  const [declining, setDeclining] = useState(false);
+  const [showDeclineForm, setShowDeclineForm] = useState(false);
 
   const [careTeamQuestions, setCareTeamQuestions] = useState({
     difficultTasks: '', challengingTime: '', triggers: '', interventions: '',
@@ -518,6 +563,24 @@ export default function IntakePipelineView({ pipeline, stateData, homeData, resi
         };
         setLeadForm(nextForm);
 
+        // Prime RCFEM defaults from AI verdict — admin can override but starts informed.
+        const rec = (nextForm.fitDetermination?.recommendation || '').toLowerCase();
+        const aiDecline = rec.includes('decline') || rec.includes('not appropriate') || nextForm.fitDetermination?.feasible === false;
+        const aiConditions = rec.includes('condition');
+        const matchPreview = matchHomeToNeeds(homeData, nextForm, residents);
+        const acuityBlock = matchPreview.acuityBlocking;
+        let primedClinical = 80;
+        let primedRationale = `AI Accept — ${nextForm.fitDetermination?.reasoning || 'No specific concerns flagged.'}`;
+        if (aiDecline || acuityBlock) {
+          primedClinical = 20;
+          primedRationale = `⚠ AI clinical override pending. Reasoning: ${nextForm.fitDetermination?.reasoning || 'Unfit per AI analysis.'} Reviewer must justify any override below.`;
+        } else if (aiConditions || matchPreview.gaps.length > 0) {
+          primedClinical = 55;
+          primedRationale = `AI Accept with Conditions. ${nextForm.fitDetermination?.reasoning || ''} Document mitigation plan below.`;
+        }
+        setRcfemScores(prev => ({ ...prev, clinical: primedClinical }));
+        setRcfemRationales(prev => ({ ...prev, clinical: primedRationale }));
+
         if (isLocalDemoEnabled()) {
           const demoState = readLocalDemoState();
           writeLocalDemoState({
@@ -622,6 +685,62 @@ Administrator: ____________________ Date: __________`;
       setNegotiatedCarePlan(fallbackTemplate);
       setReviewStep(3);
     } finally { setSaving(false); }
+  };
+
+  const handleDeclineAdmission = async () => {
+    if (!declineReason || declineReason.trim().length < 10) {
+      setError('Please document the decline reason (at least 10 characters) before confirming.');
+      return;
+    }
+    setDeclining(true);
+    try {
+      const aiSnapshot = {
+        recommendation: _leadForm.fitDetermination?.recommendation || null,
+        feasible: _leadForm.fitDetermination?.feasible ?? null,
+        reasoning: _leadForm.fitDetermination?.reasoning || null,
+        risks: _leadForm.fitDetermination?.risks || [],
+      };
+      const matchSnapshot = matchHomeToNeeds(homeData, _leadForm, residents);
+      const declineRecord = {
+        ..._leadForm,
+        status: 'declined',
+        declineReason: declineReason.trim(),
+        declinedAt: serverTimestamp(),
+        homeId: selectedHomeId,
+        aiSnapshot,
+        capabilityGaps: matchSnapshot.gaps.map(g => g.label),
+        acuityGaps: matchSnapshot.acuityGaps,
+        rcfemScores,
+        rcfemRationales,
+        part2Observations,
+        totalFitScore: calculateTotalScore(),
+      };
+
+      if (isLocalDemoEnabled()) {
+        const demoState = readLocalDemoState();
+        writeLocalDemoState({
+          ...demoState,
+          declined: [...(demoState.declined || []), { ...declineRecord, id: `demo_dec_${Date.now()}`, declinedAt: new Date().toISOString() }],
+          pipeline: (demoState.pipeline || []).filter(p => p.id !== (_leadForm.id || selectedLeadId)),
+        });
+        window.dispatchEvent(new CustomEvent('demo-refresh'));
+      } else {
+        await addDoc(collection(db, 'declined_admissions'), declineRecord);
+        if (selectedLeadId) {
+          await deleteDoc(doc(db, 'intake_pipeline', selectedLeadId));
+        }
+      }
+
+      createSystemLog('ADMISSION_DECLINED', `Declined ${_leadForm.name || 'resident'}: ${declineReason.trim().slice(0, 120)}`, null, _leadForm.name);
+      setActiveModal(null);
+      setShowDeclineForm(false);
+      setDeclineReason('');
+    } catch (err) {
+      console.error('[PIPELINE] Decline error:', err);
+      setError(err.message);
+    } finally {
+      setDeclining(false);
+    }
   };
 
   const handleCommitToRoster = async () => {
@@ -1017,24 +1136,39 @@ Administrator: ____________________ Date: __________`;
                 ))}
               </div>
             </div>
-            <div className="flex gap-4">
+            <div className="flex gap-4 items-center">
               <button onClick={() => setReviewStep(prev => Math.max(1, prev - 1))} className="px-8 py-3 border rounded-2xl font-bold hover:bg-surface transition-colors">Back</button>
+              {(() => {
+                const rec = (_leadForm.fitDetermination?.recommendation || '').toLowerCase();
+                const aiDecline = rec.includes('decline') || rec.includes('not appropriate') || _leadForm.fitDetermination?.feasible === false;
+                const matchPreview = matchHomeToNeeds(homeData, _leadForm, residents);
+                const earlyExit = (aiDecline || matchPreview.acuityBlocking) && reviewStep <= 2;
+                if (!earlyExit) return null;
+                return (
+                  <button
+                    onClick={() => setShowDeclineForm(true)}
+                    className="px-6 py-3 border-2 border-rose-500 text-rose-600 rounded-2xl font-bold hover:bg-rose-50 transition-colors flex items-center gap-2"
+                  >
+                    <AlertTriangle className="w-4 h-4" /> Decline & Document
+                  </button>
+                );
+              })()}
               {reviewStep === 1 && (
                 <button onClick={() => setReviewStep(2)} className="px-10 py-3 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-500/20">Physical Evaluation Gate</button>
               )}
               {reviewStep === 2 && (
                 <div className="flex flex-col items-end gap-2">
                   {calculateTotalScore() <= 51 && (
-                    <p className="text-[10px] text-rose-500 font-bold uppercase animate-pulse flex items-center gap-1">
-                      <AlertTriangle className="w-3 h-3" /> Score must be &gt; 51% to generate care plan
+                    <p className="text-[10px] text-rose-500 font-bold uppercase flex items-center gap-1">
+                      <AlertTriangle className="w-3 h-3" /> Score &le; 51% — use Decline &amp; Document if unfit
                     </p>
                   )}
-                  <button 
-                    onClick={handleGenerateCarePlan} 
-                    disabled={saving || calculateTotalScore() <= 51} 
-                    className="px-10 py-3 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-500/20 disabled:opacity-50 transition-all"
+                  <button
+                    onClick={calculateTotalScore() <= 51 ? () => setShowDeclineForm(true) : handleGenerateCarePlan}
+                    disabled={saving}
+                    className={`px-10 py-3 rounded-2xl font-bold shadow-lg transition-all ${calculateTotalScore() <= 51 ? 'bg-rose-600 text-white shadow-rose-500/20 hover:bg-rose-700' : 'bg-indigo-600 text-white shadow-indigo-500/20'}`}
                   >
-                    {calculateTotalScore() <= 51 ? 'Unfit for Placement' : 'Generate Care Plan'}
+                    {calculateTotalScore() <= 51 ? 'Decline & Document' : 'Generate Care Plan'}
                   </button>
                 </div>
               )}
@@ -1047,6 +1181,71 @@ Administrator: ____________________ Date: __________`;
             </div>
 
           </footer>
+        </div>
+      )}
+
+      {showDeclineForm && (
+        <div className="fixed inset-0 z-[10000] bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-8">
+          <div className="bg-white max-w-2xl w-full rounded-3xl shadow-2xl border-2 border-rose-300 overflow-hidden">
+            <header className="px-8 py-6 bg-rose-50 border-b border-rose-200 flex items-start justify-between gap-4">
+              <div>
+                <h3 className="text-2xl font-black text-rose-800 flex items-center gap-2">
+                  <AlertTriangle className="w-7 h-7" /> Decline Admission
+                </h3>
+                <p className="text-sm text-rose-700 mt-1">Document the reason this resident cannot be admitted. This will be saved to the audit log and the lead removed from the active pipeline.</p>
+              </div>
+              <button onClick={() => { setShowDeclineForm(false); setDeclineReason(''); }} className="text-rose-700 hover:bg-rose-100 rounded-full p-2">
+                <X className="w-5 h-5" />
+              </button>
+            </header>
+            <div className="p-8 space-y-5">
+              <div>
+                <p className="text-[10px] font-bold uppercase text-muted">Resident</p>
+                <p className="text-lg font-bold text-slate-800">{_leadForm.identity?.name || _leadForm.name || 'Unnamed'}</p>
+              </div>
+              {_leadForm.fitDetermination?.reasoning && (
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                  <p className="text-[10px] font-bold uppercase text-muted mb-1">AI Reasoning (snapshot)</p>
+                  <p className="text-xs text-slate-700 whitespace-pre-wrap">{_leadForm.fitDetermination.reasoning}</p>
+                </div>
+              )}
+              {Array.isArray(_leadForm.fitDetermination?.risks) && _leadForm.fitDetermination.risks.length > 0 && (
+                <div>
+                  <p className="text-[10px] font-bold uppercase text-muted mb-2">Documented Risks</p>
+                  <ul className="space-y-1">
+                    {_leadForm.fitDetermination.risks.map((r, i) => (
+                      <li key={i} className="text-xs text-slate-700 flex items-start gap-2">
+                        <AlertTriangle className="w-3 h-3 text-rose-500 flex-shrink-0 mt-0.5" /> {r}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <div>
+                <label className="text-[10px] font-bold uppercase text-muted">Decline Reason (required, min 10 chars)</label>
+                <textarea
+                  value={declineReason}
+                  onChange={e => setDeclineReason(e.target.value)}
+                  placeholder="e.g. Resident requires SNF level of care; bedfast with 2-person Hoyer transfers exceeds AFH licensed scope per Iowa Chapter 69."
+                  className="w-full mt-2 p-3 bg-white border-2 border-slate-300 rounded-xl text-sm min-h-[120px] outline-none focus:border-rose-400"
+                />
+                <p className="text-[10px] text-muted mt-1">{declineReason.length} characters</p>
+              </div>
+              {error && (
+                <div className="p-3 bg-rose-50 border border-rose-300 rounded-lg text-xs text-rose-700">{error}</div>
+              )}
+            </div>
+            <footer className="px-8 py-5 bg-slate-50 border-t flex items-center justify-end gap-3">
+              <button onClick={() => { setShowDeclineForm(false); setDeclineReason(''); setError(null); }} className="px-6 py-3 border rounded-2xl font-bold hover:bg-white">Cancel</button>
+              <button
+                onClick={handleDeclineAdmission}
+                disabled={declining || declineReason.trim().length < 10}
+                className="px-8 py-3 bg-rose-600 text-white rounded-2xl font-bold shadow-lg shadow-rose-500/20 disabled:opacity-50"
+              >
+                {declining ? 'Documenting…' : 'Confirm Decline'}
+              </button>
+            </footer>
+          </div>
         </div>
       )}
     </div>
